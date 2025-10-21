@@ -85,7 +85,7 @@ class SyntheticHomographyDataset(Dataset):
         self.roll_std = 1.0   # degrees
         self.overlap_threshold = 0.3
 
-        self.debug = False
+        self.debug = True
 
     def compute_planar_corners(
         self,
@@ -238,7 +238,7 @@ class SyntheticHomographyDataset(Dataset):
         view = cv2.warpPerspective(big_img, M, (out_w, out_h), flags=cv2.INTER_LINEAR)
         #view = view[::-1]  # camera x axis is inverted in image space
 
-        return view, view_corners, out_of_bounds
+        return view, view_corners, out_of_bounds, M
 
     def __len__(self):
         return self.num_samples
@@ -288,8 +288,8 @@ class SyntheticHomographyDataset(Dataset):
             cam2_angles = np.clip(cam2_angles, [roll_min, pitch_min, yaw_min], [roll_max, pitch_max, yaw_max])
 
             # Generate two views
-            view1, quad1, out_of_bounds1 = self.get_view(big_img1, cam1_pos, cam1_angles, out_size=self.img_resize)
-            view2, quad2, out_of_bounds2 = self.get_view(big_img2, cam2_pos, cam2_angles, out_size=self.img_resize)
+            view1, quad1, out_of_bounds1, M1 = self.get_view(big_img1, cam1_pos, cam1_angles, out_size=self.img_resize)
+            view2, quad2, out_of_bounds2, M2 = self.get_view(big_img2, cam2_pos, cam2_angles, out_size=self.img_resize)
 
             # Compute overlap
             overlap_ratio, inter_poly = get_overlap_ratio(quad1, quad2)
@@ -334,7 +334,9 @@ class SyntheticHomographyDataset(Dataset):
 
         
         # TODO get the homography between the two views
-        homography = ...
+        H_1to2 = M2 @ np.linalg.inv(M1)
+        H_1to2 /= H_1to2[2, 2]  # normalize
+        homography = torch.from_numpy(H_1to2.astype(np.float32))
 
         # The model's supervision expects certain keys. We'll provide dummy values for 3D-related data
         # to ensure compatibility with the data collator.

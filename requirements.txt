@@ -18,3 +18,4 @@ joblib>=1.0.1
 pillow==9.5.0
 lightning==2.0.0
 poselib
+pyvips
