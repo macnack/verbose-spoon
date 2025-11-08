@@ -5,16 +5,17 @@ import torch
 from torch.utils.data import Dataset
 import os
 import cv2
-import numpy as np
+import numpy as np, torch, os
 import kornia.geometry.transform as K
 import kornia.augmentation as KA
-
+import time
 from src.utils.dataset import read_scannet_gray # We can reuse this simple image reader
-
+from src.datasets.medatada_sample_recorder import SampleRecorder, short_hash
 import cv2
 import numpy as np
 from shapely.geometry import Polygon
 from math import tan, radians
+from datetime import datetime
 
 def clean_polygon(poly):
     if poly is None:
@@ -43,7 +44,7 @@ def get_overlap_ratio(poly1, poly2):
 
 
 class SyntheticHomographyDataset(Dataset):
-    def __init__(self, root_dir, list_path, img_resize=(640, 480), num_samples=100,
+    def __init__(self, root_dir, list_path, img_resize=(640, 480), num_samples=4,
                  max_size_meters=150, min_size_meters=54, px_per_meter=15, **kwargs):
         """
         Dataset for training on synthetic homography warps.
@@ -74,18 +75,34 @@ class SyntheticHomographyDataset(Dataset):
         self.px_per_meter = px_per_meter
 
         self.pitch_range = (-20, 20)  # degrees
-        self.yaw_range = (-180, 180)    # degrees
+        self.yaw_range = (-30, 30)    # degrees
         self.roll_range = (-5, 5)     # degrees
         self.z_range = (15., 200.0)      # meters
         self.x_std = 10.0  # meters
         self.y_std = 10.0  # meters
         self.z_std = 10.0  # meters
         self.pitch_std = 4.0  # degrees
-        self.yaw_std = 180.0    # degrees
+        self.yaw_std = 60.0    # degrees
         self.roll_std = 1.0   # degrees
         self.overlap_threshold = 0.3
-
-        self.debug = True
+        now = datetime.now()
+        logs_with_date = now.strftime("%Y-%m-%d %H:%M:%S.") + f"{now.microsecond * 1000:09d}"
+        self.debug = False
+        self.recorder = SampleRecorder(
+            path="logs/log_"+logs_with_date,
+            gzip_enabled=True,
+            header={
+                "dataset":"SyntheticHomography",
+                "px_per_meter": px_per_meter,
+                "img_resize": list(img_resize),
+                "pitch_range": list(self.pitch_range),
+                "yaw_range": list(self.yaw_range),
+                "roll_range": list(self.roll_range),
+                "z_range": list(self.z_range),
+                "stds": {"x": self.x_std, "y": self.y_std, "z": self.z_std,
+                         "pitch": self.pitch_std, "yaw": self.yaw_std, "roll": self.roll_std},
+            }
+        )
 
     def compute_planar_corners(
         self,
@@ -236,6 +253,9 @@ class SyntheticHomographyDataset(Dataset):
         )
         # Apply perspective transformation to get the view
         view = cv2.warpPerspective(big_img, M, (out_w, out_h), flags=cv2.INTER_LINEAR)
+        view = cv2.cvtColor(view, cv2.COLOR_BGR2GRAY)
+        view = view.reshape(1, out_h, out_w)
+        view = view.astype(np.float32) / 255.0
         #view = view[::-1]  # camera x axis is inverted in image space
 
         return view, view_corners, out_of_bounds, M
@@ -344,7 +364,34 @@ class SyntheticHomographyDataset(Dataset):
         dummy_K = torch.eye(3) # Intrinsics are not needed for homography supervision
         dummy_depth = torch.tensor([])
         scale = torch.tensor([1.0, 1.0]) # Assume no scaling beyond the initial resize
+        p1, p2 = self.image_files[idx1], self.image_files[idx2]
+        rec = {
+            "pair_id": int(idx),
+            "img_idx1": int(idx1),
+            "img_idx2": int(idx2),
+            "img_id1": short_hash(p1),  # avoids long paths in-line; still unique
+            "img_id2": short_hash(p2),
+            "img_path1": p1,            # keep full paths if you want
+            "img_path2": p2,
+            "img_resize": [int(self.img_w), int(self.img_h)],
+            "px_per_meter": float(self.px_per_meter),
+            "fov_deg": 60.0,
 
+            "cam1_pos": list(map(float, cam1_pos)),
+            "cam1_angles": list(map(float, cam1_angles)),
+            "cam2_pos": list(map(float, cam2_pos)),
+            "cam2_angles": list(map(float, cam2_angles)),
+
+            "quad1": np.asarray(quad1, float).round(4).tolist(),
+            "quad2": np.asarray(quad2, float).round(4).tolist(),
+            "overlap_ratio": float(overlap_ratio),
+            "out_of_bounds1": bool(out_of_bounds1),
+            "out_of_bounds2": bool(out_of_bounds2),
+
+            # save homography for quick repro; matrices rounded to shrink size
+            "H_1to2": np.asarray(H_1to2, float).round(8).tolist(),
+        }
+        self.recorder.write(rec)
         data = {
             'image0': view1,  # (1, H, W)
             'image1': view2,  # (1, H, W)
