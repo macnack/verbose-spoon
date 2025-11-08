@@ -114,15 +114,30 @@ def main():
 
     # Callbacks
     # TODO: update ModelCheckpoint to monitor multiple metrics
+    if 'SyntheticHomography' in config.DATASET.TRAINVAL_DATA_SOURCE:
+        # For our homography dataset, we monitor the Mean Corner Error (MCE).
+        # Lower is better, so the mode is 'min'.
+        monitor_metric = 'MCE'
+        monitor_mode = 'min'
+        filename_format = "{epoch}-{MCE:.2f}"
+        print(f"\n--- ModelCheckpoint configured to monitor '{monitor_metric}' (mode: {monitor_mode}) ---\n")
+    else:
+        # For the original datasets (ScanNet, MegaDepth), monitor auc@10.
+        # Higher is better, so the mode is 'max'.
+        monitor_metric = 'auc@10'
+        monitor_mode = 'max'
+        filename_format = "{epoch}-{auc@5:.3f}-{auc@10:.3f}-{auc@20:.3f}"
+        print(f"\n--- ModelCheckpoint configured to monitor '{monitor_metric}' (mode: {monitor_mode}) ---\n")
+    
     ckpt_callback = ModelCheckpoint(
-        monitor="auc@10",
+        monitor=monitor_metric,
         verbose=True,
         save_top_k=10,
-        mode="max",
+        mode=monitor_mode,
         save_last=True,
         save_weights_only=True,
         dirpath=str(ckpt_dir),
-        filename="{epoch}-{auc@5:.3f}-{auc@10:.3f}-{auc@20:.3f}",
+        filename=filename_format,
     )
     lr_monitor = LearningRateMonitor(logging_interval="step")
     callbacks = [lr_monitor]
