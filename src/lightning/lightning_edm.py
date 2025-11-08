@@ -18,6 +18,7 @@ from src.optimizers import build_optimizer, build_scheduler
 from src.utils.metrics import (
     compute_symmetrical_epipolar_errors,
     compute_pose_errors,
+    compute_homography_errors,
     aggregate_metrics,
 )
 from src.utils.plotting import make_matching_figures
@@ -112,36 +113,48 @@ class PL_EDM(pl.LightningModule):
                 self.loss(batch)
 
     def _compute_metrics(self, batch):
-        # compute epi_errs for each match
-        compute_symmetrical_epipolar_errors(batch)
+        # This function now decides which evaluation to run
+        dataset_name = batch['dataset_name'][0]
 
-        compute_pose_errors(
-            batch, self.config
-        )  # compute R_errs, t_errs, pose_errs for each pair
+        if dataset_name == 'SyntheticHomography':
+            # --- Homography Evaluation ---
+            compute_homography_errors(batch, self.config)
+            rel_pair_names = list(zip(*batch["pair_names"]))
+            bs = batch["image0"].size(0)
+            metrics = {
+                "identifiers": [f"pair_{batch['pair_id'][b].item()}" for b in range(bs)],
+                "corner_error": batch["corner_error"],
+                "inliers": batch["inliers"],
+                "num_matches": [batch["mconf"].shape[0]],
+            }
+        
+        else:
+            # --- Original Pose Evaluation ---
+            compute_symmetrical_epipolar_errors(batch)
+            compute_pose_errors(batch, self.config)
+            rel_pair_names = list(zip(*batch["pair_names"]))
+            bs = batch["image0"].size(0)
+            metrics = {
+                "identifiers": ["#".join(rel_pair_names[b]) for b in range(bs)],
+                "epi_errs": [
+                    (batch["epi_errs"].reshape(-1, 1))[batch["m_bids"] == b]
+                    .reshape(-1)
+                    .cpu()
+                    .numpy()
+                    for b in range(bs)
+                ],
+                "R_errs": batch["R_errs"],
+                "t_errs": batch["t_errs"],
+                "inliers": batch["inliers"],
+                "num_matches": [batch["mconf"].shape[0]],
+            }
 
-        rel_pair_names = list(zip(*batch["pair_names"]))
-        bs = batch["image0"].size(0)
-        metrics = {
-            # to filter duplicate pairs caused by DistributedSampler
-            "identifiers": ["#".join(rel_pair_names[b]) for b in range(bs)],
-            "epi_errs": [
-                (batch["epi_errs"].reshape(-1, 1))[batch["m_bids"] == b]
-                .reshape(-1)
-                .cpu()
-                .numpy()
-                for b in range(bs)
-            ],
-            "R_errs": batch["R_errs"],
-            "t_errs": batch["t_errs"],
-            "inliers": batch["inliers"],
-            "num_matches": [batch["mconf"].shape[0]],  # batch size = 1 only
-        }
         ret_dict = {"metrics": metrics}
         return ret_dict, rel_pair_names
 
     def training_step(self, batch, batch_idx):
         self._trainval_inference(batch)
-
+        
         # logging
         if (
             self.trainer.global_rank == 0
@@ -211,80 +224,115 @@ class PL_EDM(pl.LightningModule):
 
     def on_validation_epoch_end(self):
         outputs = self.validation_step_outputs
+        
+        # Guard against empty outputs (e.g., if validation is skipped)
+        if not outputs:
+            return
 
-        # handle multiple validation sets
-        multi_outputs = (
-            [outputs] if not isinstance(outputs[0], (list, tuple)) else outputs
-        )
-        multi_val_metrics = defaultdict(list)
+        # Handle multiple validation sets (dataloaders)
+        multi_outputs = [outputs] if not isinstance(outputs[0], list) else outputs
+        
+        # This will hold the value of the primary metric from each validation set
+        # for checkpointing purposes.
+        primary_metric_values = []
 
-        for valset_idx, outputs in enumerate(multi_outputs):
+        # Determine the primary metric to monitor based on the dataset type.
+        # We check the first output of the first validation set to determine this.
+        first_output = multi_outputs[0][0]
+        # A simple heuristic: check if 'H_errs' (or your corner_error key) exists.
+        is_homography_eval = 'H_errs' in first_output['metrics'] or 'corner_error' in first_output['metrics']
+
+        if is_homography_eval:
+            # For homography, we'll monitor Mean Corner Error (MCE), where lower is better.
+            primary_metric_name = 'MCE'
+        else:
+            # For pose datasets, we monitor the standard pose AUC@10, where higher is better.
+            primary_metric_name = 'auc@10'
+
+        for valset_idx, outputs_per_set in enumerate(multi_outputs):
             # since pl performs sanity_check at the very begining of the training
             cur_epoch = self.trainer.current_epoch
-            if self.trainer.ckpt_path is None and self.trainer.sanity_checking:
-                cur_epoch = -1
+            # if self.trainer.is_sanity_check:
+            #     cur_epoch = -1
 
-            # 1. loss_scalars: dict of list, on cpu
-            _loss_scalars = [o["loss_scalars"] for o in outputs]
+            # 1. Gather loss scalars from all GPUs
+            _loss_scalars = [o["loss_scalars"] for o in outputs_per_set]
             loss_scalars = {
-                k: flattenList(all_gather([_ls[k] for _ls in _loss_scalars]))
+                k: flattenList(all_gather([_ls.get(k, torch.tensor(0.0)) for _ls in _loss_scalars]))
                 for k in _loss_scalars[0]
             }
 
-            # 2. val metrics: dict of list, numpy
-            _metrics = [o["metrics"] for o in outputs]
+            # 2. Gather and aggregate all metrics from all GPUs
+            _metrics = [o["metrics"] for o in outputs_per_set]
+            # Create a full list of all keys from all dictionaries
+            all_keys = set(k for d in _metrics for k in d.keys())
             metrics = {
-                k: flattenList(all_gather(
-                    flattenList([_me[k] for _me in _metrics])))
-                for k in _metrics[0]
+                k: flattenList(all_gather(flattenList([_me.get(k, []) for _me in _metrics])))
+                for k in all_keys
             }
-            # NOTE: all ranks need to `aggregate_merics`, but only log at rank-0
+
+            # `aggregate_metrics` will now calculate all relevant metrics (pose AUC, H AUC, MCE, etc.)
+            # and return them in a single dictionary.
             val_metrics_4tb = aggregate_metrics(
                 metrics, self.config.TRAINER.EPI_ERR_THR, config=self.config
             )
-            for thr in [5, 10, 20]:
-                multi_val_metrics[f"auc@{thr}"].append(
-                    val_metrics_4tb[f"auc@{thr}"])
 
-            # 3. figures
-            _figures = [o["figures"] for o in outputs]
-            figures = {
-                k: flattenList(
-                    gather(flattenList([_me[k] for _me in _figures])))
-                for k in _figures[0]
-            }
+            # --- Store the value of the primary metric for this validation set ---
+            if primary_metric_name in val_metrics_4tb:
+                primary_metric_values.append(val_metrics_4tb[primary_metric_name])
 
-            # tensorboard records only on rank 0
+            # 3. Gather figures for visualization (only on rank 0)
+            _figures = [o["figures"] for o in outputs_per_set]
+            # Ensure figures dict is not empty before processing
+            if _figures and _figures[0]:
+                figure_keys = _figures[0].keys()
+                figures = {
+                    k: flattenList(gather(flattenList([_me.get(k, []) for _me in _figures])))
+                    for k in figure_keys
+                }
+            else:
+                figures = {}
+
+
+            # --- Logging to TensorBoard (only on rank 0) ---
             if self.trainer.global_rank == 0:
+                # Log average loss scalars
                 for k, v in loss_scalars.items():
                     mean_v = torch.stack(v).mean()
                     self.logger.experiment.add_scalar(
                         f"val_{valset_idx}/avg_{k}", mean_v, global_step=cur_epoch
                     )
 
+                # Log all computed metrics
                 for k, v in val_metrics_4tb.items():
                     self.logger.experiment.add_scalar(
                         f"metrics_{valset_idx}/{k}", v, global_step=cur_epoch
                     )
 
-                for k, v in figures.items():
-                    if self.trainer.global_rank == 0:
-                        for plot_idx, fig in enumerate(v):
-                            self.logger.experiment.add_figure(
-                                f"val_match_{valset_idx}/{k}/pair-{plot_idx}",
-                                fig,
-                                cur_epoch,
-                                close=True,
-                            )
+                # Log figures
+                for k, v_list in figures.items():
+                    for plot_idx, fig in enumerate(v_list):
+                        self.logger.experiment.add_figure(
+                            f"val_match_{valset_idx}/{k}/pair-{plot_idx}",
+                            fig,
+                            cur_epoch,
+                            close=True,
+                        )
+            
+            # Close all matplotlib figures to prevent memory leaks
             plt.close("all")
 
-        for thr in [5, 10, 20]:
-            # log on all ranks for ModelCheckpoint callback to work properly
+        # --- Log the primary metric for ModelCheckpoint on all ranks ---
+        if primary_metric_values:
+            # Average the primary metric across all validation sets if there are multiple
+            mean_primary_metric = np.mean(primary_metric_values)
             self.log(
-                f"auc@{thr}",
-                torch.tensor(np.mean(multi_val_metrics[f"auc@{thr}"])),
-                sync_dist=True,
-            )  # ckpt monitors on this
+                primary_metric_name,          # e.g., 'MCE' or 'auc@10'
+                torch.tensor(mean_primary_metric),
+                sync_dist=True,               # Ensure all GPUs have the same value
+            )
+        
+        # Clear the outputs list for the next validation epoch
         self.validation_step_outputs.clear()
 
     def test_step(self, batch, batch_idx):
@@ -322,19 +370,45 @@ class PL_EDM(pl.LightningModule):
         if self.dump_dir is not None:
             with self.profiler.profile("dump_results"):
                 # dump results for further analysis
-                keys_to_save = {"mkpts0_f", "mkpts1_f", "mconf", "epi_errs"}
                 pair_names = list(zip(*batch["pair_names"]))
                 bs = batch["image0"].shape[0]
                 dumps = []
+                
+                # Check which dataset is being used to decide what to dump
+                dataset_name = batch['dataset_name'][0]
+
                 for b_id in range(bs):
                     item = {}
                     mask = batch["m_bids"] == b_id
-                    item["pair_names"] = pair_names[b_id]
-                    item["identifier"] = "#".join(rel_pair_names[b_id])
-                    for key in keys_to_save:
-                        item[key] = batch[key][mask].cpu().numpy()
-                    for key in ["R_errs", "t_errs", "inliers"]:
-                        item[key] = batch[key][b_id]
+                    
+                    if dataset_name == 'SyntheticHomography':
+                        # --- DUMP LOGIC FOR HOMOGRAPHY ---
+                        keys_to_save = {"mkpts0_f", "mkpts1_f", "mconf"}
+                        item["pair_id"] = batch["pair_id"][b_id].item()
+                        item["identifier"] = f"pair_{item['pair_id']}"
+                        
+                        for key in keys_to_save:
+                            item[key] = batch[key][mask].cpu().numpy()
+                        
+                        # Save homography-specific metrics and ground truth
+                        item["corner_error"] = batch["corner_error"][b_id]
+                        item["inliers"] = batch["inliers"][b_id]
+                        item["homography_gt"] = batch["homography"][b_id].cpu().numpy()
+                        item["homography_est"] = batch["H_est"][b_id].cpu().numpy()
+                        item["sym_transfer_err"] = batch["sym_transfer_err"][b_id].cpu().numpy()
+                    
+                    else:
+                        # --- ORIGINAL DUMP LOGIC FOR POSE ---
+                        keys_to_save = {"mkpts0_f", "mkpts1_f", "mconf", "epi_errs"}
+                        item["pair_names"] = pair_names[b_id]
+                        item["identifier"] = "#".join(rel_pair_names[b_id])
+
+                        for key in keys_to_save:
+                            item[key] = batch[key][mask].cpu().numpy()
+                        
+                        for key in ["R_errs", "t_errs", "inliers"]:
+                            item[key] = batch[key][b_id]
+                    
                     dumps.append(item)
                 ret_dict["dumps"] = dumps
 
