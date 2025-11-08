@@ -83,7 +83,6 @@ def make_matching_figure(
         ha="left",
         color=txt_color,
     )
-
     # save or return figure
     if path:
         plt.savefig(str(path), bbox_inches="tight", pad_inches=0)
@@ -91,6 +90,76 @@ def make_matching_figure(
     else:
         return fig
 
+def _make_informative_homography_figure(data, b_id, alpha="dynamic"):
+    # --- 1. SETUP ---
+    b_mask = data["m_bids"] == b_id
+    
+    # Threshold for a match to be considered a "ground-truth inlier"
+    gt_inlier_thr = 3.0 # pixels
+
+    # Prepare images and keypoints
+    img0 = (data["image0"][b_id][0].cpu().numpy() * 255).round().astype(np.uint8)
+    img1 = (data["image1"][b_id][0].cpu().numpy() * 255).round().astype(np.uint8)
+    kpts0 = data["mkpts0_f"][b_mask].cpu()
+    kpts1 = data["mkpts1_f"][b_mask].cpu()
+
+    if kpts0.shape[0] == 0:
+        # Handle case with no matches
+        text = ["#Matches: 0", "Corner Error: N/A"]
+        return make_matching_figure(img0, img1, np.array([]), np.array([]), [], text=text)
+
+    # --- 2. DETERMINE MATCH CATEGORIES ---
+    # Get ground-truth homography
+    H_gt = data.get('homography_gt', data['homography'])[b_id].cpu()
+    
+    # a) Find ground-truth inliers (True Positives + False Negatives)
+    kpts0_warped = warp_points_torch(kpts0, H_gt)
+    err = torch.norm(kpts0_warped - kpts1, dim=1)
+    is_gt_inlier = (err < gt_inlier_thr).numpy()
+
+    # b) Get RANSAC inliers (True Positives + False Positives)
+    ransac_inliers = data["inliers"][b_id]
+
+    # --- 3. ASSIGN COLORS ---
+    # Initialize color array (e.g., to blue for True Negatives)
+    # RGBA format: [R, G, B, Alpha]
+    colors = np.array([[0.5, 0.5, 1.0, 0.6]] * len(kpts0)) # Light blue
+    
+    # Red: False Positives (RANSAC chose it, but it's wrong)
+    colors[ransac_inliers & ~is_gt_inlier] = [1.0, 0.0, 0.0, 1.0]
+    
+    # Yellow: False Negatives (RANSAC ignored it, but it's correct)
+    colors[~ransac_inliers & is_gt_inlier] = [1.0, 1.0, 0.0, 0.8]
+    
+    # Green: True Positives (RANSAC chose it, and it's correct)
+    colors[ransac_inliers & is_gt_inlier] = [0.0, 1.0, 0.0, 1.0]
+
+    # --- 4. PREPARE TEXT ---
+    n_matches = len(kpts0)
+    n_gt_inliers = np.sum(is_gt_inlier)
+    n_ransac_inliers = np.sum(ransac_inliers)
+    n_true_positives = np.sum(ransac_inliers & is_gt_inlier)
+    
+    precision = n_true_positives / n_ransac_inliers if n_ransac_inliers > 0 else 0
+    recall = n_true_positives / n_gt_inliers if n_gt_inliers > 0 else 0
+    corner_err = data["corner_error"][b_id]
+
+    text = [
+        f"Corner Error: {corner_err:.2f} px",
+        f"#Matches: {n_matches}",
+        f"  - GT Inliers (<{gt_inlier_thr}px): {n_gt_inliers}",
+        f"  - RANSAC Inliers: {n_ransac_inliers}",
+        f"RANSAC Precision: {precision:.1%}",
+        f"RANSAC Recall: {recall:.1%}"
+    ]
+    
+    # --- 5. CREATE FIGURE ---
+    # Convert points to numpy for plotting
+    kpts0_np = kpts0.numpy()
+    kpts1_np = kpts1.numpy()
+    figure = make_matching_figure(img0, img1, kpts0_np, kpts1_np, colors, text=text)
+    
+    return figure
 
 def _make_evaluation_figure(data, b_id, alpha="dynamic"):
     b_mask = data["m_bids"] == b_id
@@ -102,35 +171,53 @@ def _make_evaluation_figure(data, b_id, alpha="dynamic"):
             * 255).round().astype(np.int32)
     kpts0 = data["mkpts0_f"][b_mask].clone().detach().cpu().numpy()
     kpts1 = data["mkpts1_f"][b_mask].clone().detach().cpu().numpy()
+    gt_inlier_thr = 3.0  # pixels
 
     # for megadepth, we visualize matches on the resized image
     if "scale0" in data:
         kpts0 = kpts0 / data["scale0"][b_id].cpu().numpy()[[1, 0]]
         kpts1 = kpts1 / data["scale1"][b_id].cpu().numpy()[[1, 0]]
+        
+    if "epi_errs" in data:
+        epi_errs = data["epi_errs"][b_mask].cpu().numpy()
+        correct_mask = epi_errs < conf_thr
+        precision = np.mean(correct_mask) if len(correct_mask) > 0 else 0
+        n_correct = np.sum(correct_mask)
+        n_gt_matches = int(data["conf_matrix_gt"][b_id].sum().cpu())
+        recall = 0 if n_gt_matches == 0 else n_correct / (n_gt_matches)
+        # matching info
+        if alpha == "dynamic":
+            alpha = dynamic_alpha(len(correct_mask))
+        color = error_colormap(epi_errs, conf_thr, alpha=alpha)
+        text = [
+            f"#Matches {len(kpts0)}",
+            f"Precision({conf_thr:.2e}) ({100 * precision:.1f}%): {n_correct}/{len(kpts0)}",
+            f"Recall({conf_thr:.2e}) ({100 * recall:.1f}%): {n_correct}/{n_gt_matches}",
+        ]
+        # make the figure
+        return make_matching_figure(img0, img1, kpts0, kpts1, color, text=text)
 
-    epi_errs = data["epi_errs"][b_mask].cpu().numpy()
-    correct_mask = epi_errs < conf_thr
-    precision = np.mean(correct_mask) if len(correct_mask) > 0 else 0
-    n_correct = np.sum(correct_mask)
-    n_gt_matches = int(data["conf_matrix_gt"][b_id].sum().cpu())
-    recall = 0 if n_gt_matches == 0 else n_correct / (n_gt_matches)
-    # recall might be larger than 1, since the calculation of conf_matrix_gt
-    # uses groundtruth depths and camera poses, but epipolar distance is used here.
+    if "corner_error" in data:
+        corner_err = data["corner_error"][b_id]
+        errors = data["sym_transfer_err"][b_mask.cpu().numpy()]
+        correct_mask = errors < gt_inlier_thr
+        n_ransac_inliers = np.sum(data["inliers"][b_id])
+        precision = np.mean(correct_mask) if len(correct_mask) > 0 else 0
+        n_correct = np.sum(correct_mask)
+        recall = n_correct / n_ransac_inliers if n_ransac_inliers > 0 else 0
+        text = [
+            f"Corner Error: {corner_err:.2f} px",
+            f"#Matches: {len(kpts0)}",
+            f"GT Inliers (<{conf_thr:.1f}px): {n_correct}",
+            f"Precision (vs GT): {precision:.1%}",
+            f"Recall (vs RANSAC): {recall:.1%}"
+        ]
+        if alpha == "dynamic":
+            alpha = dynamic_alpha(len(correct_mask))
+        color = error_colormap(errors, conf_thr, alpha=alpha)
 
-    # matching info
-    if alpha == "dynamic":
-        alpha = dynamic_alpha(len(correct_mask))
-    color = error_colormap(epi_errs, conf_thr, alpha=alpha)
-
-    text = [
-        f"#Matches {len(kpts0)}",
-        f"Precision({conf_thr:.2e}) ({100 * precision:.1f}%): {n_correct}/{len(kpts0)}",
-        f"Recall({conf_thr:.2e}) ({100 * recall:.1f}%): {n_correct}/{n_gt_matches}",
-    ]
-
-    # make the figure
-    figure = make_matching_figure(img0, img1, kpts0, kpts1, color, text=text)
-    return figure
+        # make the figure
+    return make_matching_figure(img0, img1, kpts0, kpts1, color=color, text=text)
 
 
 def _make_confidence_figure(data, b_id):
