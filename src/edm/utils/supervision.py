@@ -269,7 +269,8 @@ def spvs_coarse_homography(data, config):
     N, _, H0, W0 = data['image0'].shape
     scale = config['EDM']['LOCAL_RESOLUTION']
     h0, w0 = H0 // scale, W0 // scale
-    
+    assert(H0 % scale == 0 and W0 % scale == 0), \
+        "Image size must be divisible by the coarse scale."
     # 1. Create a grid of points in the coarse resolution
     grid_pt0_c = create_meshgrid(h0, w0, False, device).reshape(1, h0 * w0, 2).repeat(N, 1, 1) # [N, hw, 2]
 
