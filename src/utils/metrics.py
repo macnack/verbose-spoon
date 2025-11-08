@@ -106,6 +106,24 @@ def estimate_pose(kpts0, kpts1, K0, K1, thresh, conf=0.99999):
 
     return ret
 
+def estimate_homography(kpts0, kpts1, thresh, conf=0.99999):
+    """Estimate homography matrix using RANSAC.
+    Args:
+        kpts0 (np.ndarray): [N, 2]
+        kpts1 (np.ndarray): [N, 2]
+        thresh (float): RANSAC pixel threshold.
+        conf (float): RANSAC confidence.
+    Returns:
+        H (np.ndarray): [3, 3] homography matrix.
+        mask (np.ndarray): [N] boolean inlier mask.
+    """
+    if len(kpts0) < 4:
+        return None, None
+    
+    H, mask = cv2.findHomography(
+        kpts0, kpts1, cv2.RANSAC, ransacReprojThreshold=thresh, confidence=conf
+    )
+    return H, mask.ravel() > 0
 
 def estimate_lo_pose(kpts0, kpts1, K0, K1, thresh, conf=0.99999):
     from .warppers import Camera, Pose
@@ -221,7 +239,78 @@ def compute_pose_errors(data, config):
             data["t_errs"].append(T_list)
             data["inliers"].append(inliers_list[0])
 
+def compute_homography_errors(data, config):
+    """
+    Update:
+        data (dict):{
+            "corner_error": List[float]: [N] - corner reprojection error
+            "H_est": List[np.ndarray]: [N] - estimated homography
+            "inliers": List[np.ndarray]: [N] - RANSAC inlier mask
+            "sym_transfer_err": List[np.ndarray]: [N] - symmetric transfer error for all matches
+        }
+    """
+    pixel_thr = config.TRAINER.RANSAC_PIXEL_THR  # e.g., 0.5, 1.0, etc.
+    conf = config.TRAINER.RANSAC_CONF
+    
+    data.update({"corner_error": [], "inliers": [], "H_est": [], "sym_transfer_err": []})
 
+    m_bids = data["m_bids"].cpu().numpy()
+    pts0 = data["mkpts0_f"].cpu().numpy()
+    pts1 = data["mkpts1_f"].cpu().numpy()
+    H_gt = data["homography"].cpu().numpy()
+    
+    h, w = data['image0'].shape[2], data['image0'].shape[3]
+    corners = np.array([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]], dtype=np.float32)
+    corners = np.expand_dims(corners, axis=0) # Shape: [1, 4, 2]
+
+    all_transfer_errors = []
+
+    for bs in range(data['image0'].shape[0]):
+        mask = m_bids == bs
+        bpts0, bpts1 = pts0[mask], pts1[mask]
+        H_gt = H_gt[bs]
+
+        # --- Calculate Symmetric Transfer Error for this item's matches ---
+        if bpts0.shape[0] > 0:
+            bpts0_warped = cv2.perspectiveTransform(bpts0.reshape(-1, 1, 2), H_gt).reshape(-1, 2)
+            bpts1_warped = cv2.perspectiveTransform(bpts1.reshape(-1, 1, 2), np.linalg.inv(H_gt)).reshape(-1, 2)
+            
+            err_0to1 = np.linalg.norm(bpts0_warped - bpts1, axis=1)
+            err_1to0 = np.linalg.norm(bpts1_warped - bpts0, axis=1)
+            
+            transfer_errs = (err_0to1 + err_1to0) / 2.0
+        else:
+            transfer_errs = np.array([])
+            
+        all_transfer_errors.append(transfer_errs)
+        
+        # --- Estimate Homography with RANSAC ---
+        H_est, inliers_mask = estimate_homography(bpts0, bpts1, pixel_thr, conf=conf)
+        
+        if H_est is None:
+            # Handle RANSAC failure
+            data["corner_error"].append(np.inf)
+            data["inliers"].append(np.array([]).astype(bool))
+            data["H_est"].append(np.eye(3)) # Placeholder
+            continue
+
+        # Store RANSAC results
+        data["inliers"].append(inliers_mask)
+        data["H_est"].append(H_est)
+        
+        # --- Compute Corner Error ---
+        corners_gt_warped = cv2.perspectiveTransform(corners, H_gt)
+        corners_est_warped = cv2.perspectiveTransform(corners, H_est)
+        
+        corner_error = np.mean(np.linalg.norm(corners_gt_warped - corners_est_warped, axis=2))
+        data["corner_error"].append(corner_error)
+        
+    # --- FINAL STEP: Store all transfer errors as a single flat array ---
+    # This makes it easy for the plotting function to use.
+    if len(all_transfer_errors) > 0:
+        data['sym_transfer_err'] = np.concatenate(all_transfer_errors)
+    else:
+        data['sym_transfer_err'] = np.array([])
 # --- METRIC AGGREGATION ---
 
 
@@ -260,10 +349,8 @@ def epidist_prec(errors, thresholds, ret_dict=False):
 
 
 def aggregate_metrics(metrics, epi_err_thr=5e-4, config=None):
-    """Aggregate metrics for the whole dataset:
-    (This method should be called once per dataset)
-    1. AUC of the pose error (angular) at the threshold [5, 10, 20]
-    2. Mean matching precision at the threshold 5e-4(ScanNet), 1e-4(MegaDepth)
+    """Aggregate metrics for the whole dataset.
+    This function is now flexible and handles both pose and homography metrics.
     """
     # filter duplicates
     unq_ids = OrderedDict((iden, id)
@@ -271,29 +358,51 @@ def aggregate_metrics(metrics, epi_err_thr=5e-4, config=None):
     unq_ids = list(unq_ids.values())
     logger.info(f"Aggregating metrics over {len(unq_ids)} unique items...")
 
-    # pose auc
-    angular_thresholds = [5, 10, 20]
+    # Create a dictionary to hold all aggregated results
+    aggregated_metrics = {}
 
-    if config.EDM.EVAL_TIMES >= 1:
-        pose_errors = (
-            np.max(np.stack([metrics["R_errs"], metrics["t_errs"]]), axis=0)
-            .reshape(-1, config.EDM.EVAL_TIMES)[unq_ids]
-            .reshape(-1)
+    # --- Pose Metrics (if available) ---
+    if 'R_errs' in metrics and 't_errs' in metrics:
+        pose_errors = np.max(np.stack([
+            np.array(metrics["R_errs"], dtype=object)[unq_ids], 
+            np.array(metrics["t_errs"], dtype=object)[unq_ids]
+        ]), axis=0)
+        
+        if config and hasattr(config.EDM, 'EVAL_TIMES') and config.EDM.EVAL_TIMES > 1:
+             pose_errors = pose_errors.reshape(-1, config.EDM.EVAL_TIMES).reshape(-1)
+
+        angular_thresholds = [5, 10, 20]
+        pose_aucs = error_auc(pose_errors, angular_thresholds)
+        aggregated_metrics.update({f'pose_{k}': v for k, v in pose_aucs.items()})
+
+    # --- Epipolar Error Metrics (if available) ---
+    if 'epi_errs' in metrics:
+        # CORRECTED LINE: Use the function argument epi_err_thr
+        dist_thresholds = [epi_err_thr]
+        precs = epidist_prec(
+            np.array(metrics["epi_errs"], dtype=object)[unq_ids], 
+            dist_thresholds, True
         )
-    else:
-        pose_errors = np.max(np.stack([metrics["R_errs"], metrics["t_errs"]]), axis=0)[
-            unq_ids
-        ]
-    # (auc@5, auc@10, auc@20)
-    aucs = error_auc(pose_errors, angular_thresholds)
+        aggregated_metrics.update(precs)
+    
+    # --- Homography Metrics (if corner error data is present) ---
+    # `corner_error` is the key we created in `compute_homography_errors`.
+    if 'corner_error' in metrics:
+        corner_errors = np.array(metrics["corner_error"])[unq_ids]
+        # Filter out any 'inf' values that result from RANSAC failures
+        corner_errors = corner_errors[np.isfinite(corner_errors)]
+        
+        # Use pixel-based thresholds for corner error AUC
+        pixel_thresholds = [1, 3, 5, 10]
+        h_aucs = error_auc(corner_errors, pixel_thresholds)
+        # Store with a distinct name, e.g., 'h_auc@1' for "homography auc"
+        aggregated_metrics.update({f'h_{k}': v for k, v in h_aucs.items()})
+        
+        # Also, calculate the Mean Corner Error (MCE)
+        aggregated_metrics['MCE'] = np.mean(corner_errors)
 
-    # matching precision
-    dist_thresholds = [epi_err_thr]
-    precs = epidist_prec(
-        np.array(metrics["epi_errs"], dtype=object)[
-            unq_ids], dist_thresholds, True
-    )  # (prec@err_thr)
-
-    u_num_mathces = np.array(metrics["num_matches"], dtype=object)[unq_ids]
-    num_matches = {f"num_matches": u_num_mathces.mean()}
-    return {**aucs, **precs, **num_matches}
+    # --- General Metrics ---
+    u_num_matches = np.array(metrics["num_matches"], dtype=object)[unq_ids]
+    aggregated_metrics['num_matches'] = u_num_matches.mean()
+    
+    return aggregated_metrics
