@@ -15,7 +15,7 @@ from src.utils.misc import get_rank_zero_only_logger, setup_gpus
 from src.utils.profiler import build_profiler
 from src.lightning.data import MultiSceneDataModule
 from src.lightning.lightning_edm import PL_EDM
-
+import torch
 loguru_logger = get_rank_zero_only_logger(loguru_logger)
 
 
@@ -83,6 +83,7 @@ def main():
     config = get_cfg_defaults()
     config.merge_from_file(args.main_cfg_path)
     config.merge_from_file(args.data_cfg_path)
+    torch.set_float32_matmul_precision('high')
     pl.seed_everything(config.TRAINER.SEED)  # reproducibility
     # TODO: Use different seeds for each dataloader workers
     # This is needed for data augmentation
