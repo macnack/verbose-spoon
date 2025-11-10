@@ -58,6 +58,8 @@ RUN echo ". $CONDA_DIR/etc/profile.d/conda.sh" >> ~/.bashrc && \
 
 # --- Verify environment ---
 RUN conda run -n edm python -c "import sys; print('✅ Python in:', sys.executable)"
+RUN conda run -n edm pip install opencv-python-headless==4.5.5.64
+
 RUN conda info --envs
 
 CMD ["conda", "run", "-n", "edm", "python", "homography_estimation.py"]
