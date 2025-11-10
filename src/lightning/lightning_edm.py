@@ -49,8 +49,7 @@ class PL_EDM(pl.LightningModule):
 
         # Pretrained weights
         if pretrained_ckpt:
-            state_dict = torch.load(pretrained_ckpt, map_location="cpu")[
-                "state_dict"]
+            state_dict = torch.load(pretrained_ckpt, map_location="cpu", weights_only=True)["state_dict"]
             self.matcher.load_state_dict(state_dict, strict=True)
             logger.info(f"Load '{pretrained_ckpt}' as pretrained checkpoint")
 
