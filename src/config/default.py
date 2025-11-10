@@ -104,6 +104,7 @@ _CN.DATASET.AUGMENTATION_TYPE = None  # options: [None, 'dark', 'mobile']
 _CN.DATASET.MGDPT_IMG_PAD = True  # pad img to square with size = MGDPT_IMG_RESIZE
 _CN.DATASET.MGDPT_DEPTH_PAD = True  # pad depthmap to square with size = 2000
 _CN.DATASET.MGDPT_DF = 8
+_CN.DATASET.TRAIN_NUM_SAMPLES = None
 
 
 ##############  Trainer  ##############

@@ -6,11 +6,11 @@ from configs.data.base import cfg
 # You can create this list file with: ls data/coco/train2017/ > data/coco/train_list.txt
 TRAIN_IMAGE_ROOT = "/home/mackop/Github/vps_n/sat_data"
 TRAIN_LIST_PATH = "/home/mackop/Github/vps_n/train_list.txt"
-
+TRAIN_IMG_SIZE = 12#32768
 cfg.DATASET.TRAINVAL_DATA_SOURCE = "SyntheticHomography"
 cfg.DATASET.TRAIN_DATA_ROOT = TRAIN_IMAGE_ROOT
 cfg.DATASET.TRAIN_LIST_PATH = TRAIN_LIST_PATH
-
+cfg.DATASET.TRAIN_NUM_SAMPLES = TRAIN_IMG_SIZE
 # You can optionally create a validation set as well
 cfg.DATASET.VAL_DATA_ROOT = TRAIN_IMAGE_ROOT
 cfg.DATASET.VAL_LIST_PATH = TRAIN_LIST_PATH

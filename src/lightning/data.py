@@ -48,6 +48,9 @@ class MultiSceneDataModule(pl.LightningDataModule):
         self.train_npz_root = config.DATASET.TRAIN_NPZ_ROOT
         self.train_list_path = config.DATASET.TRAIN_LIST_PATH
         self.train_intrinsic_path = config.DATASET.TRAIN_INTRINSIC_PATH
+        self.train_num_samples = config.DATASET.TRAIN_NUM_SAMPLES  # (optional)
+        if self.train_num_samples is None:
+            self.train_num_samples = 10
         self.val_data_root = config.DATASET.VAL_DATA_ROOT
         self.val_pose_root = config.DATASET.VAL_POSE_ROOT  # (optional)
         self.val_npz_root = config.DATASET.VAL_NPZ_ROOT
@@ -293,6 +296,7 @@ class MultiSceneDataModule(pl.LightningDataModule):
                 root_dir=data_root,
                 list_path=self.train_list_path if mode == 'train' else self.val_list_path,
                 img_resize=self.scan_img_resize, # Reuse ScanNet's resize settings
+                num_samples=self.train_num_samples if mode =='train' else self.train_num_samples//10,
             )
 
         if str(data_source).lower() == "megadepth":
