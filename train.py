@@ -83,7 +83,7 @@ def main():
     config = get_cfg_defaults()
     config.merge_from_file(args.main_cfg_path)
     config.merge_from_file(args.data_cfg_path)
-    torch.set_float32_matmul_precision('high')
+    torch.set_float32_matmul_precision('medium')
     pl.seed_everything(config.TRAINER.SEED)  # reproducibility
     # TODO: Use different seeds for each dataloader workers
     # This is needed for data augmentation
