@@ -6,6 +6,7 @@ from torch.utils.data import Dataset
 import os
 import cv2
 import numpy as np, torch, os
+from numpy.random import Generator, PCG64
 import kornia.geometry.transform as K
 import kornia.augmentation as KA
 import time
@@ -45,7 +46,7 @@ def get_overlap_ratio(poly1, poly2):
 
 class SyntheticHomographyDataset(Dataset):
     def __init__(self, root_dir, list_path, img_resize=(640, 480), num_samples=4,
-                 max_size_meters=150, min_size_meters=54, px_per_meter=15, **kwargs):
+                 max_size_meters=150, min_size_meters=54, px_per_meter=15, seed=None, **kwargs):
         """
         Dataset for training on synthetic homography warps.
         Args:
@@ -54,6 +55,7 @@ class SyntheticHomographyDataset(Dataset):
             img_resize (tuple): The size (W, H) to resize images to.
         """
         super().__init__()
+        self.seed = seed
         self.root_dir = root_dir
         self.img_resize = img_resize
         self.img_w, self.img_h = img_resize
@@ -264,8 +266,14 @@ class SyntheticHomographyDataset(Dataset):
         return self.num_samples
 
     def __getitem__(self, idx):
-        idx1 = np.random.randint(0, len(self.list_of_images))
-        idx2 = np.random.randint(0, len(self.list_of_images))
+        if self.seed is not None:
+            # For reproducible sets (validation), create a generator seeded
+            # with the base seed plus the item's unique index.
+            rng = Generator(PCG64(seed=self.seed + idx))
+        else:
+            rng = Generator(PCG64())
+        idx1 = rng.integers(0, len(self.list_of_images))
+        idx2 = rng.integers(0, len(self.list_of_images))
         big_img1 = self.list_of_images[idx1].numpy()
         big_img2 = self.list_of_images[idx2].numpy()
 
@@ -283,25 +291,25 @@ class SyntheticHomographyDataset(Dataset):
         while out_of_bounds1 or out_of_bounds2 or overlap_ratio < self.overlap_threshold:
             # Randomly sample camera positions and orientations
             cam1_pos = np.array([
-                np.random.uniform(0., max_x),
-                np.random.uniform(0., max_y),
-                np.random.uniform(z_min, z_max)  # height in meters
+                rng.uniform(0., max_x),
+                rng.uniform(0., max_y),
+                rng.uniform(z_min, z_max)  # height in meters
             ], dtype=np.float32)
             cam1_angles = np.array([
-                np.random.uniform(roll_min, roll_max),   # roll
-                np.random.uniform(pitch_min, pitch_max), # pitch
-                np.random.uniform(yaw_min, yaw_max)      # yaw
+                rng.uniform(roll_min, roll_max),   # roll
+                rng.uniform(pitch_min, pitch_max), # pitch
+                rng.uniform(yaw_min, yaw_max)      # yaw
             ], dtype=np.float32)
 
             cam2_pos = cam1_pos + np.array([
-                np.random.normal(0., self.x_std),
-                np.random.normal(0., self.y_std),
-                np.random.uniform(0., self.z_std)  # height in meters
+                rng.normal(0., self.x_std),
+                rng.normal(0., self.y_std),
+                rng.uniform(0., self.z_std)  # height in meters
             ], dtype=np.float32)
             cam2_angles = cam1_angles + np.array([
-                np.random.normal(0., self.roll_std),   # roll
-                np.random.normal(0., self.pitch_std), # pitch
-                np.random.normal(0., self.yaw_std)      # yaw
+                rng.normal(0., self.roll_std),   # roll
+                rng.normal(0., self.pitch_std), # pitch
+                rng.normal(0., self.yaw_std)      # yaw
             ], dtype=np.float32)
             cam2_pos = np.clip(cam2_pos, [0,0,z_min], [max_x, max_y, z_max])
             cam2_angles[2] = (cam2_angles[2] + 180) % 360 - 180  # wrap yaw to [-180,180]

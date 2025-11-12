@@ -49,6 +49,7 @@ class MultiSceneDataModule(pl.LightningDataModule):
         self.train_list_path = config.DATASET.TRAIN_LIST_PATH
         self.train_intrinsic_path = config.DATASET.TRAIN_INTRINSIC_PATH
         self.train_num_samples = config.DATASET.TRAIN_NUM_SAMPLES  # (optional)
+        self.reproducible_training = config.DATASET.SYNTHETIC_HOMOGRAPHY_REPRODUCIBLE_TRAINING
         if self.train_num_samples is None:
             self.train_num_samples = 10
         self.val_data_root = config.DATASET.VAL_DATA_ROOT
@@ -288,6 +289,7 @@ class MultiSceneDataModule(pl.LightningDataModule):
         )
 
         if str(data_source).lower() == "synthetichomography":
+            train_seed = (self.seed + 100000) if self.reproducible_training else None
             # For synthetic data, we don't concatenate multiple scene datasets.
             # We create one dataset from a list of images.
             # `npz_names` from `_setup_dataset` is the list of image files,
@@ -297,6 +299,7 @@ class MultiSceneDataModule(pl.LightningDataModule):
                 list_path=self.train_list_path if mode == 'train' else self.val_list_path,
                 img_resize=self.scan_img_resize, # Reuse ScanNet's resize settings
                 num_samples=self.train_num_samples if mode =='train' else self.train_num_samples//10,
+                seed=train_seed if mode == 'train' else self.seed,
             )
 
         if str(data_source).lower() == "megadepth":
