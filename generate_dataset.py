@@ -69,11 +69,13 @@ def main(args):
         if mode == "train":
             print("\n--- Generating Training Set ---")
             num_samples_to_gen = args.num_train
-            dataset_seed = 42
+            source_list = args.source_train_list
+            dataset_seed = 42 + 10000
             base_dir = output_path / "train"
         else: # mode == "val"
             print("\n--- Generating Validation Set ---")
             num_samples_to_gen = args.num_val
+            source_list = args.source_val_list
             dataset_seed = 42
             base_dir = output_path / "val"
         
@@ -85,7 +87,7 @@ def main(args):
         # 1. Initialize the dataset instance
         generator_dataset = SyntheticHomographyDataset(
             root_dir=args.source_dir,
-            list_path=args.source_list,
+            list_path=source_list,
             img_resize=(args.img_w, args.img_h),
             num_samples=num_samples_to_gen,
             seed=dataset_seed
@@ -118,7 +120,8 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Pre-generate the Synthetic Homography Dataset.")
     parser.add_argument("--source_dir", type=str, required=True, help="Path to large source TIFFs.")
-    parser.add_argument("--source_list", type=str, required=True, help="Text file listing source images.")
+    parser.add_argument("--source_train_list", type=str, required=True, help="Text file listing source images.")
+    parser.add_argument("--source_val_list", type=str, required=True, help="Text file listing source images.")
     parser.add_argument("--output_dir", type=str, default="data/pregenerated_homography", help="Directory to save the generated dataset.")
     
     parser.add_argument("--num_train", type=int, default=8192, help="Number of training pairs.")
