@@ -65,11 +65,12 @@ class SyntheticHomographyDataset(Dataset):
         with open(list_path, 'r') as f:
             self.image_files = [os.path.join(self.root_dir, line.strip()) for line in f.readlines()]
 
-        self.list_of_images = [
-            pyvips.Image.new_from_file(el) for el in self.image_files]
-
-        self.org_image_width = self.list_of_images[0].width
-        self.org_image_height = self.list_of_images[0].height
+        # self.list_of_images = [
+        #     pyvips.Image.new_from_file(el) for el in self.image_files]
+        # self.org_image_width = self.list_of_images[0].width
+        # self.org_image_height = self.list_of_images[0].height
+        self.topological_image = None # For the OSM map
+        self.topological_map_path = "/home/remodel/workspace/sat_data/topological_stitched.tif"
 
         self.max_size = max_size_meters * px_per_meter
         self.min_size = min_size_meters * px_per_meter
@@ -90,21 +91,32 @@ class SyntheticHomographyDataset(Dataset):
         now = datetime.now()
         logs_with_date = now.strftime("%Y-%m-%d %H:%M:%S.") + f"{now.microsecond * 1000:09d}"
         self.debug = False
-        self.recorder = SampleRecorder(
-            path="logs/log_"+logs_with_date,
-            gzip_enabled=True,
-            header={
-                "dataset":"SyntheticHomography",
-                "px_per_meter": px_per_meter,
-                "img_resize": list(img_resize),
-                "pitch_range": list(self.pitch_range),
-                "yaw_range": list(self.yaw_range),
-                "roll_range": list(self.roll_range),
-                "z_range": list(self.z_range),
-                "stds": {"x": self.x_std, "y": self.y_std, "z": self.z_std,
-                         "pitch": self.pitch_std, "yaw": self.yaw_std, "roll": self.roll_std},
-            }
-        )
+        # self.recorder = SampleRecorder(
+        #     path="logs/log_"+logs_with_date,
+        #     gzip_enabled=True,
+        #     header={
+        #         "dataset":"SyntheticHomography",
+        #         "px_per_meter": px_per_meter,
+        #         "img_resize": list(img_resize),
+        #         "pitch_range": list(self.pitch_range),
+        #         "yaw_range": list(self.yaw_range),
+        #         "roll_range": list(self.roll_range),
+        #         "z_range": list(self.z_range),
+        #         "stds": {"x": self.x_std, "y": self.y_std, "z": self.z_std,
+        #                  "pitch": self.pitch_std, "yaw": self.yaw_std, "roll": self.roll_std},
+        #     }
+        # )
+        with open(os.path.join(self.root_dir, "dataset_info.txt"), 'w') as f:
+            f.write(f"Number of images: {len(self.image_files)}\n")
+            f.write(f"Image resize: {img_resize}\n")
+            f.write(f"Pixels per meter: {px_per_meter}\n")
+            f.write(f"Pitch range: {self.pitch_range}\n")
+            f.write(f"Yaw range: {self.yaw_range}\n")
+            f.write(f"Roll range: {self.roll_range}\n")
+            f.write(f"Z range: {self.z_range}\n")
+            f.write(f"Overlap threshold: {self.overlap_threshold}\n")
+            f.write(f"Seed: {self.seed}\n")
+        print(self.root_dir, "dataset_info.txt")
 
     def compute_planar_corners(
         self,
@@ -265,7 +277,18 @@ class SyntheticHomographyDataset(Dataset):
     def __len__(self):
         return self.num_samples
 
+    def _lazy_init_images(self):
+        """Initializes the pyvips image list. Called by each worker process."""
+        if not hasattr(self, 'list_of_images'):
+            print(f"Worker {os.getpid()}: Loading source images into memory...")
+            self.list_of_images = [pyvips.Image.new_from_file(el) for el in self.image_files]
+            self.topological_image = pyvips.Image.new_from_file(self.topological_map_path)
+            self.big_topo_img = self.topological_image.numpy()
+            self.org_image_width = self.list_of_images[0].width
+            self.org_image_height = self.list_of_images[0].height
+
     def __getitem__(self, idx):
+        self._lazy_init_images()
         if self.seed is not None:
             # For reproducible sets (validation), create a generator seeded
             # with the base seed plus the item's unique index.
@@ -318,6 +341,9 @@ class SyntheticHomographyDataset(Dataset):
             # Generate two views
             view1, quad1, out_of_bounds1, M1 = self.get_view(big_img1, cam1_pos, cam1_angles, out_size=self.img_resize)
             view2, quad2, out_of_bounds2, M2 = self.get_view(big_img2, cam2_pos, cam2_angles, out_size=self.img_resize)
+            # Generate two topo view
+            view1_topo, _, _, _ = self.get_view(self.big_topo_img, cam1_pos, cam1_angles, out_size=self.img_resize)
+            view2_topo, _, _, _ = self.get_view(self.big_topo_img, cam2_pos, cam2_angles, out_size=self.img_resize)
 
             # Compute overlap
             overlap_ratio, inter_poly = get_overlap_ratio(quad1, quad2)
@@ -377,8 +403,6 @@ class SyntheticHomographyDataset(Dataset):
             "pair_id": int(idx),
             "img_idx1": int(idx1),
             "img_idx2": int(idx2),
-            "img_id1": short_hash(p1),  # avoids long paths in-line; still unique
-            "img_id2": short_hash(p2),
             "img_path1": p1,            # keep full paths if you want
             "img_path2": p2,
             "img_resize": [int(self.img_w), int(self.img_h)],
@@ -399,10 +423,12 @@ class SyntheticHomographyDataset(Dataset):
             # save homography for quick repro; matrices rounded to shrink size
             "H_1to2": np.asarray(H_1to2, float).round(8).tolist(),
         }
-        self.recorder.write(rec)
+        # self.recorder.write(rec)
         data = {
             'image0': view1,  # (1, H, W)
             'image1': view2,  # (1, H, W)
+            'semantic0': torch.from_numpy(view1_topo),
+            'semantic1': torch.from_numpy(view2_topo),
             'homography': homography, # The ground truth homography
             'dataset_name': 'SyntheticHomography',
             'pair_names': ("x", "y"),
@@ -417,4 +443,4 @@ class SyntheticHomographyDataset(Dataset):
             'scale0': scale,
             'scale1': scale,
         }
-        return data
+        return data, rec
