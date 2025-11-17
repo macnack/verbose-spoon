@@ -141,9 +141,9 @@ def spvs_coarse(data, config):
 
 
 def compute_supervision_coarse(data, config):
-    assert (
-        len(set(data["dataset_name"])) == 1
-    ), "Do not support mixed datasets training!"
+    # assert (
+    #     len(set(data["dataset_name"])) == 1
+    # ), "Do not support mixed datasets training!"
     data_source = data["dataset_name"][0]
     if data_source.lower() in ["scannet", "megadepth"]:
         spvs_coarse(data, config)
