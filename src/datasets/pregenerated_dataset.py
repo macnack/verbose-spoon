@@ -41,18 +41,3 @@ class PreGeneratedDataset(Dataset):
         file_path = os.path.join(self.sample_dir, self.files[idx])
         data = torch.load(file_path, weights_only=False)
         return data
-    
-    
-    
-
-# from torch.utils.data import DataLoader
-
-# train_dataset = PreGeneratedDataset("/home/mackop/EDM/data/my_pregen_dataset2/train")
-# # val_dataset   = PreGeneratedDataset("dataset/val")
-
-# train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True)
-# # val_loader   = DataLoader(val_dataset, batch_size=8, shuffle=False)
-
-# for batch in train_loader:
-#     print(batch)   # or inspect your data
-#     break
