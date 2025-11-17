@@ -70,23 +70,23 @@ class SyntheticHomographyDataset(Dataset):
         # self.org_image_width = self.list_of_images[0].width
         # self.org_image_height = self.list_of_images[0].height
         self.topological_image = None # For the OSM map
-        self.topological_map_path = "/home/remodel/workspace/sat_data/topological_stitched.tif"
+        self.topological_map_path = os.path.join(self.root_dir, "topological_stitched.tif")
 
         self.max_size = max_size_meters * px_per_meter
         self.min_size = min_size_meters * px_per_meter
         self.out_ratio = self.img_w / self.img_h
         self.px_per_meter = px_per_meter
 
-        self.pitch_range = (-20, 20)  # degrees
+        self.pitch_range = (-25, 25)  # degrees
         self.yaw_range = (-30, 30)    # degrees
-        self.roll_range = (-5, 5)     # degrees
+        self.roll_range = (-25, 25)     # degrees
         self.z_range = (15., 200.0)      # meters
         self.x_std = 10.0  # meters
         self.y_std = 10.0  # meters
         self.z_std = 10.0  # meters
-        self.pitch_std = 4.0  # degrees
+        self.pitch_std = 10.0  # degrees
         self.yaw_std = 60.0    # degrees
-        self.roll_std = 1.0   # degrees
+        self.roll_std = 10.0   # degrees
         self.overlap_threshold = 0.3
         now = datetime.now()
         logs_with_date = now.strftime("%Y-%m-%d %H:%M:%S.") + f"{now.microsecond * 1000:09d}"
