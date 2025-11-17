@@ -46,7 +46,7 @@ def get_overlap_ratio(poly1, poly2):
 
 class SyntheticHomographyDataset(Dataset):
     def __init__(self, root_dir, list_path, img_resize=(640, 480), num_samples=4,
-                 max_size_meters=150, min_size_meters=54, px_per_meter=15, seed=None, **kwargs):
+                 max_size_meters=150, min_size_meters=54, px_per_meter=15, seed=None,load_to_ram=True, **kwargs):
         """
         Dataset for training on synthetic homography warps.
         Args:
@@ -65,12 +65,10 @@ class SyntheticHomographyDataset(Dataset):
         with open(list_path, 'r') as f:
             self.image_files = [os.path.join(self.root_dir, line.strip()) for line in f.readlines()]
 
-        # self.list_of_images = [
-        #     pyvips.Image.new_from_file(el) for el in self.image_files]
-        # self.org_image_width = self.list_of_images[0].width
-        # self.org_image_height = self.list_of_images[0].height
-        self.topological_image = None # For the OSM map
-        self.topological_map_path = "/home/remodel/workspace/sat_data/topological_stitched.tif"
+        self.big_images = None          # list of np.ndarray, one per TIFF
+        self.big_topo_img = None        # np.ndarray for topo map
+        self.topological_image = None
+        self.topological_map_path = f"{root_dir}/topological_stitched.tif"
 
         self.max_size = max_size_meters * px_per_meter
         self.min_size = min_size_meters * px_per_meter
@@ -117,6 +115,8 @@ class SyntheticHomographyDataset(Dataset):
             f.write(f"Overlap threshold: {self.overlap_threshold}\n")
             f.write(f"Seed: {self.seed}\n")
         print(self.root_dir, "dataset_info.txt")
+        if load_to_ram:
+            self._lazy_init_images()
 
     def compute_planar_corners(
         self,
@@ -278,27 +278,44 @@ class SyntheticHomographyDataset(Dataset):
         return self.num_samples
 
     def _lazy_init_images(self):
-        """Initializes the pyvips image list. Called by each worker process."""
-        if not hasattr(self, 'list_of_images'):
-            print(f"Worker {os.getpid()}: Loading source images into memory...")
-            self.list_of_images = [pyvips.Image.new_from_file(el) for el in self.image_files]
-            self.topological_image = pyvips.Image.new_from_file(self.topological_map_path)
-            self.big_topo_img = self.topological_image.numpy()
-            self.org_image_width = self.list_of_images[0].width
-            self.org_image_height = self.list_of_images[0].height
+        """
+        Load all large TIFFs (and topo map) into RAM once.
+        If called in the main process before DataLoader workers are spawned,
+        the memory can be shared between workers via fork.
+        """
+        if self.big_images is not None and self.big_topo_img is not None:
+            return  # already initialized
+
+        print(f"[{os.getpid()}] Loading all source TIFFs into RAM...")
+
+        # Load original TIFFs with pyvips
+        vips_imgs = [pyvips.Image.new_from_file(el, access='sequential')
+                    for el in self.image_files]
+
+        # Convert to numpy *once* per image (usually uint8 HxWxC)
+        self.big_images = [img.numpy() for img in vips_imgs]
+
+        # Load topo image
+        self.topological_image = pyvips.Image.new_from_file(self.topological_map_path,
+                                                            access='sequential')
+        self.big_topo_img = self.topological_image.numpy()
+
+        # Original full resolution
+        self.org_image_height, self.org_image_width = self.big_images[0].shape[:2]
 
     def __getitem__(self, idx):
-        self._lazy_init_images()
+        if self.big_images is None or self.big_topo_img is None:
+            self._lazy_init_images()
         if self.seed is not None:
             # For reproducible sets (validation), create a generator seeded
             # with the base seed plus the item's unique index.
             rng = Generator(PCG64(seed=self.seed + idx))
         else:
             rng = Generator(PCG64())
-        idx1 = rng.integers(0, len(self.list_of_images))
-        idx2 = rng.integers(0, len(self.list_of_images))
-        big_img1 = self.list_of_images[idx1].numpy()
-        big_img2 = self.list_of_images[idx2].numpy()
+        idx1 = rng.integers(0, len(self.big_images))
+        idx2 = rng.integers(0, len(self.big_images))
+        big_img1 = self.big_images[idx1]
+        big_img2 = self.big_images[idx2]
 
         max_x = min(big_img1.shape[1], big_img2.shape[1]) / self.px_per_meter
         max_y = min(big_img1.shape[0], big_img2.shape[0]) / self.px_per_meter
