@@ -70,7 +70,7 @@ def main(args):
             print("\n--- Generating Training Set ---")
             num_samples_to_gen = args.num_train
             source_list = args.source_train_list
-            dataset_seed = 42 + 10000
+            dataset_seed = 42 + args.offset
             base_dir = output_path / "train"
         else: # mode == "val"
             print("\n--- Generating Validation Set ---")
@@ -107,7 +107,8 @@ def main(args):
         metadata_list = []
         # The 'enumerate' provides the global index for saving files
         for i, data_item in enumerate(tqdm(loader, desc=f"Generating {mode} set")):
-            metadata = save_sample(data_item, i, base_dir)
+            global_index = i + args.offset
+            metadata = save_sample(data_item, global_index, base_dir)
             if metadata:
                 metadata_list.append(metadata)
 
@@ -132,7 +133,8 @@ if __name__ == "__main__":
     parser.add_argument("--img_w", type=int, default=640, help="Width of generated images.")
     parser.add_argument("--img_h", type=int, default=480, help="Height of generated images.")
 
-    parser.add_argument("--num_workers", type=int, default=8, help="Number of CPU workers for parallel generation.")
+    parser.add_argument("--num_workers", type=int, default=0, help="Number of CPU workers for parallel generation.")
+    parser.add_argument("--offset", type=int, default=0)
 
     args = parser.parse_args()
     main(args)
