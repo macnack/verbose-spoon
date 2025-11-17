@@ -114,7 +114,7 @@ def main(args):
 
         # 3. Save the metadata to a CSV file
         df = pd.DataFrame(metadata_list)
-        df.to_csv(base_dir / "metadata.csv", index=False)
+        df.to_csv(base_dir / f"metadata_{args.offset}.csv", index=False)
         print(f"Saved {mode} metadata to {base_dir / 'metadata.csv'}")
 
     print("\nDataset generation complete!")
