@@ -40,4 +40,5 @@ class PreGeneratedDataset(Dataset):
     def __getitem__(self, idx):
         file_path = os.path.join(self.sample_dir, self.files[idx])
         data = torch.load(file_path, weights_only=False)
+        data['dataset_name'] = 'SyntheticHomography'
         return data
