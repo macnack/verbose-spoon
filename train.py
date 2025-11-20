@@ -30,7 +30,8 @@ def parse_args():
     parser.add_argument("--exp_name", type=str, default="default_exp_name")
     parser.add_argument("--gpus", default=1)
     parser.add_argument("--num_nodes", type=int, default=1)
-    parser.add_argument("--accelerator", type=str, default="ddp")
+    parser.add_argument("--accelerator", type=str, default="gpu")
+    parser.add_argument("--strategy", type=str, default="ddp")
     parser.add_argument("--batch_size", type=int,
                         default=4, help="batch_size per gpu")
     parser.add_argument("--num_workers", type=int, default=4)
@@ -121,10 +122,8 @@ def main():
     )
     neptune_logger.log_hyperparams(vars(args))
     try:
-        neptune_logger.run["source_code"].upload_files(["*.py", "src/**/*.py", "configs/**/*.py", "scripts/**/*.sh"])
         neptune_logger.run["config/main_cfg"].upload(args.main_cfg_path)
         neptune_logger.run["config/data_cfg"].upload(args.data_cfg_path)
-        neptune_logger.run["requirements"].upload("requirements.txt")
     except Exception as e:
         loguru_logger.warning(f"Neptune: Failed to upload source code or configs. Error: {e}")
     # Callbacks
@@ -161,9 +160,9 @@ def main():
 
     # Lightning Trainer
     trainer = pl.Trainer(
-        accelerator="gpu",
+        accelerator=args.accelerator,
         devices=args.gpus,
-        strategy="ddp",
+        strategy=args.strategy,
         num_nodes=args.num_nodes,
         max_epochs=args.max_epochs,
         log_every_n_steps=args.log_every_n_steps,
