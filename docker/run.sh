@@ -1,6 +1,7 @@
 #!/bin/bash
 
 docker run -it --rm \
+    --env-file .secret \
     --hostname="$(hostname)" \
     --ipc=host \
     --gpus all \
@@ -8,6 +9,7 @@ docker run -it --rm \
     --volume="$(pwd)/..:/home/mackop/workspace" \
     --privileged \
     --network=host \
-    --name=gps_denied \
+    --name=gps_denied_exp \
     --user "$(id -u):$(id -g)" \
-    edm "/bin/bash"
+    --volume="/media/mackop/data_ssd://home/mackop/workspace/data/poznan" \
+    edm:exp "/bin/bash"
