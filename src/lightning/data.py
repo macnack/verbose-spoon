@@ -128,19 +128,17 @@ class MultiSceneDataModule(pl.LightningDataModule):
         Args:
             stage (str): 'fit' in training phase, and 'test' in testing phase.
         """
-
-        assert stage in ["fit", "validate",
-                         "test"], "stage must be either fit or test"
-
-        try:
+        if dist.is_available() and dist.is_initialized():
             self.world_size = dist.get_world_size()
             self.rank = dist.get_rank()
             logger.info(f"[rank:{self.rank}] world_size: {self.world_size}")
-        except AssertionError as ae:
+        else:
             self.world_size = 1
             self.rank = 0
-            # logger.warning(" (set wolrd_size=1 and rank=0)")
-            logger.warning(str(ae) + " (set wolrd_size=1 and rank=0)")
+            logger.warning(" (set world_size=1 and rank=0)")
+
+        assert stage in ["fit", "validate",
+                         "test"], "stage must be either fit or test"
 
         if stage == "fit":
             self.train_dataset = self._setup_dataset(
@@ -436,8 +434,8 @@ class MultiSceneDataModule(pl.LightningDataModule):
         # TODO check if we can fit the existing logic with out new dataset
         if str(self.trainval_data_source).lower() == "synthetichomography" or str(self.trainval_data_source).lower() == "synthetichomographypregen":
             # The synthetic dataset is not a ConcatDataset, so we use a standard sampler.
-            sampler = DistributedSampler(self.train_dataset, shuffle=True)
-            return DataLoader(self.train_dataset, sampler=sampler, **self.train_loader_params)
+            # sampler = DistributedSampler(self.train_dataset, shuffle=True)
+            return DataLoader(self.train_dataset, shuffle=True, sampler=None, **self.train_loader_params)
 
         assert self.data_sampler in ["scene_balance"]
         logger.info(
@@ -465,9 +463,9 @@ class MultiSceneDataModule(pl.LightningDataModule):
             f"[rank:{self.rank}/{self.world_size}]: Val Sampler and DataLoader re-init."
         )
         if not isinstance(self.val_dataset, abc.Sequence):
-            sampler = DistributedSampler(self.val_dataset, shuffle=False)
+            # sampler = DistributedSampler(self.val_dataset, shuffle=False)
             return DataLoader(
-                self.val_dataset, sampler=sampler, **self.val_loader_params
+                self.val_dataset, sampler=None, **self.val_loader_params
             )
         else:
             dataloaders = []
