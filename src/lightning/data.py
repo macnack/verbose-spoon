@@ -27,6 +27,7 @@ from src.datasets.megadepth import MegaDepthDataset
 from src.datasets.scannet import ScanNetDataset
 from src.datasets.sampler import RandomConcatSampler
 from src.datasets.synthetic_homography import SyntheticHomographyDataset
+from src.datasets.pregenerated_dataset import PreGeneratedDataset
 
 
 class MultiSceneDataModule(pl.LightningDataModule):
@@ -236,7 +237,7 @@ class MultiSceneDataModule(pl.LightningDataModule):
         """Setup train / val / test set"""
         # TODO: check if this needs to look so ugly
         data_source = self.trainval_data_source if mode in ['train', 'val'] else self.test_data_source
-        if str(data_source).lower() == "synthetichomography":
+        if str(data_source).lower() == "synthetichomography" or str(data_source).lower() == "synthetichomographypregen":
             # For the synthetic dataset, we bypass the scene-splitting logic
             # and directly build the dataset.
             return self._build_concat_dataset(
@@ -300,6 +301,10 @@ class MultiSceneDataModule(pl.LightningDataModule):
                 img_resize=self.scan_img_resize, # Reuse ScanNet's resize settings
                 num_samples=self.train_num_samples if mode =='train' else self.train_num_samples//10,
                 seed=train_seed if mode == 'train' else self.seed,
+            )
+        if str(data_source).lower() == "synthetichomographypregen":
+            return PreGeneratedDataset(
+                root_dir=data_root,
             )
 
         if str(data_source).lower() == "megadepth":
@@ -429,7 +434,7 @@ class MultiSceneDataModule(pl.LightningDataModule):
     def train_dataloader(self):
         """Build training dataloader for ScanNet / MegaDepth."""
         # TODO check if we can fit the existing logic with out new dataset
-        if str(self.trainval_data_source).lower() == "synthetichomography":
+        if str(self.trainval_data_source).lower() == "synthetichomography" or str(self.trainval_data_source).lower() == "synthetichomographypregen":
             # The synthetic dataset is not a ConcatDataset, so we use a standard sampler.
             sampler = DistributedSampler(self.train_dataset, shuffle=True)
             return DataLoader(self.train_dataset, sampler=sampler, **self.train_loader_params)

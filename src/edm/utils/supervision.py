@@ -141,13 +141,13 @@ def spvs_coarse(data, config):
 
 
 def compute_supervision_coarse(data, config):
-    assert (
-        len(set(data["dataset_name"])) == 1
-    ), "Do not support mixed datasets training!"
+    # assert (
+    #     len(set(data["dataset_name"])) == 1
+    # ), "Do not support mixed datasets training!"
     data_source = data["dataset_name"][0]
     if data_source.lower() in ["scannet", "megadepth"]:
         spvs_coarse(data, config)
-    elif data_source.lower() == "synthetichomography":
+    elif data_source.lower() in ["synthetichomography", "synthetichomographypregen"]:
         spvs_coarse_homography(data, config)
     else:
         raise ValueError(f"Unknown data source: {data_source}")
