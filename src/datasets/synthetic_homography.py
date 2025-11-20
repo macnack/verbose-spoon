@@ -46,7 +46,7 @@ def get_overlap_ratio(poly1, poly2):
 
 class SyntheticHomographyDataset(Dataset):
     def __init__(self, root_dir, list_path, img_resize=(640, 480), num_samples=4,
-                 max_size_meters=150, min_size_meters=54, px_per_meter=15, seed=None, **kwargs):
+                 max_size_meters=150, min_size_meters=54, px_per_meter=15, seed=None,load_to_ram=True, **kwargs):
         """
         Dataset for training on synthetic homography warps.
         Args:
@@ -76,9 +76,9 @@ class SyntheticHomographyDataset(Dataset):
         self.out_ratio = self.img_w / self.img_h
         self.px_per_meter = px_per_meter
 
-        self.pitch_range = (-20, 20)  # degrees
+        self.pitch_range = (-25, 25)  # degrees
         self.yaw_range = (-30, 30)    # degrees
-        self.roll_range = (-20, 20)     # degrees
+        self.roll_range = (-25, 25)     # degrees
         self.z_range = (15., 200.0)      # meters
         self.x_std = 10.0  # meters
         self.y_std = 10.0  # meters
@@ -272,10 +272,10 @@ class SyntheticHomographyDataset(Dataset):
             rng = Generator(PCG64(seed=self.seed + idx))
         else:
             rng = Generator(PCG64())
-        idx1 = rng.integers(0, len(self.list_of_images))
-        idx2 = rng.integers(0, len(self.list_of_images))
-        big_img1 = self.list_of_images[idx1].numpy()
-        big_img2 = self.list_of_images[idx2].numpy()
+        idx1 = rng.integers(0, len(self.big_images))
+        idx2 = rng.integers(0, len(self.big_images))
+        big_img1 = self.big_images[idx1]
+        big_img2 = self.big_images[idx2]
 
         max_x = min(big_img1.shape[1], big_img2.shape[1]) / self.px_per_meter
         max_y = min(big_img1.shape[0], big_img2.shape[0]) / self.px_per_meter

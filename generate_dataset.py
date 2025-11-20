@@ -90,7 +90,8 @@ def main(args):
             list_path=source_list,
             img_resize=(args.img_w, args.img_h),
             num_samples=num_samples_to_gen,
-            seed=dataset_seed
+            seed=dataset_seed,
+            load_to_ram=True
         )
 
         # 2. Create a DataLoader to manage the parallel workers
@@ -99,7 +100,8 @@ def main(args):
             batch_size=1, # We process one sample at a time
             shuffle=False, # We iterate sequentially from 0 to N-1
             num_workers=args.num_workers,
-            pin_memory=False # Not needed for saving to disk
+            pin_memory=False, # Not needed for saving to disk
+            persistent_workers=True if args.num_workers > 0 else False,
         )
         
         metadata_list = []
@@ -112,7 +114,7 @@ def main(args):
 
         # 3. Save the metadata to a CSV file
         df = pd.DataFrame(metadata_list)
-        df.to_csv(base_dir / "metadata.csv", index=False)
+        df.to_csv(base_dir / f"metadata_{args.offset}.csv", index=False)
         print(f"Saved {mode} metadata to {base_dir / 'metadata.csv'}")
 
     print("\nDataset generation complete!")
