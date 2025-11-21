@@ -7,11 +7,11 @@ from loguru import logger as loguru_logger
 
 import lightning.pytorch as pl
 from lightning.pytorch.utilities import rank_zero_only
-from lightning.pytorch.loggers import TensorBoardLogger, NeptuneLogger
+from lightning.pytorch.loggers import TensorBoardLogger
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
 from lightning.pytorch.strategies import DDPStrategy
 from src.config.default import get_cfg_defaults
-from src.utils.misc import get_rank_zero_only_logger, setup_gpus, lower_config
+from src.utils.misc import get_rank_zero_only_logger, setup_gpus
 from src.utils.profiler import build_profiler
 from src.lightning.data import MultiSceneDataModule
 from src.lightning.lightning_edm import PL_EDM
@@ -128,7 +128,7 @@ def main():
         loguru_logger.warning(f"Neptune: Failed to upload source code or configs. Error: {e}")
     # Callbacks
     # TODO: update ModelCheckpoint to monitor multiple metrics
-    if config.DATASET.TRAINVAL_DATA_SOURCE in ['SyntheticHomography', 'synthetichomographypregen']:
+    if 'SyntheticHomography' in config.DATASET.TRAINVAL_DATA_SOURCE:
         # For our homography dataset, we monitor the Mean Corner Error (MCE).
         # Lower is better, so the mode is 'min'.
         monitor_metric = 'MCE'
@@ -171,7 +171,7 @@ def main():
         benchmark=True,
         gradient_clip_val=config.TRAINER.GRADIENT_CLIPPING,
         callbacks=callbacks,
-        logger=[logger, neptune_logger],
+        logger=logger,
         sync_batchnorm=config.TRAINER.WORLD_SIZE > 0,
         use_distributed_sampler=False,
         profiler=profiler,
