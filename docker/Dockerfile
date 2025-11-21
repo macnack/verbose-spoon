@@ -2,10 +2,11 @@ ARG USERNAME=mackop
 ARG USER_UID=1000
 ARG USER_GID=1000
 
-FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu20.04
+# --- NEW: newer CUDA base image (works well with cu12 wheels + Blackwell) ---
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    CUDA_HOME=/usr/local/cuda-11.8 \
+    CUDA_HOME=/usr/local/cuda \
     CONDA_ENV_NAME=edm \
     PYTHON_VERSION=3.10 \
     CONDA_DIR=/opt/conda
@@ -23,6 +24,7 @@ ENV PATH=$CONDA_DIR/bin:$PATH
 
 # --- Custom requirements ---
 COPY environment.yaml /tmp/environment.yaml
+COPY requirements.txt /tmp/requirements.txt
 
 # --- Create conda env ---
 RUN conda init bash && \
@@ -58,7 +60,7 @@ RUN echo ". $CONDA_DIR/etc/profile.d/conda.sh" >> ~/.bashrc && \
 
 # --- Verify environment ---
 RUN conda run -n edm python -c "import sys; print('✅ Python in:', sys.executable)"
-RUN conda run -n edm pip install opencv-python-headless==4.5.5.64
+RUN conda run -n edm pip install --upgrade opencv-python opencv-python-headless
 
 RUN conda info --envs
 
