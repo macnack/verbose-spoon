@@ -192,6 +192,9 @@ class PL_EDM(pl.LightningModule):
                                 logger.experiment[f"train_match/{k}"].log(v)
 
         out = {"loss": batch["loss"]}
+        if batch["loss"] > 400:
+            print("Loss is NaN or Inf, skipping backpropagation step.")
+            return None
         self.log("loss", batch["loss"], prog_bar=True, rank_zero_only=True)
 
         # avoid significant memory growth
