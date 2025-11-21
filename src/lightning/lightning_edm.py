@@ -25,13 +25,8 @@ from src.utils.plotting import make_matching_figures
 from src.utils.comm import gather, all_gather
 from src.utils.misc import lower_config, flattenList
 from src.utils.profiler import PassThroughProfiler
-try:
-    # Neptune is an optional dependency for logging figures.
-    from neptune.types import File
-    NEPTUNE_AVAILABLE = True
-except ImportError:
-    NEPTUNE_AVAILABLE = False
-    
+
+
 class PL_EDM(pl.LightningModule):
     def __init__(self, config, pretrained_ckpt=None, profiler=None, dump_dir=None):
         """
@@ -42,8 +37,7 @@ class PL_EDM(pl.LightningModule):
         # Misc
         self.config = config  # full config
         _config = lower_config(self.config)
-        self.save_hyperparameters(_config)
-        
+
         self.profiler = profiler or PassThroughProfiler()
         self.n_vals_plot = max(
             config.TRAINER.N_VAL_PAIRS_TO_PLOT // config.TRAINER.WORLD_SIZE, 1
@@ -166,11 +160,10 @@ class PL_EDM(pl.LightningModule):
             and self.global_step % self.trainer.log_every_n_steps == 0
         ):
             # scalars
-            # for k, v in batch["loss_scalars"].items():
-            #     self.logger.experiment.add_scalar(
-            #         f"train/{k}", v, self.global_step)
-            log_scalars = {f"train/{k}": v for k, v in batch["loss_scalars"].items()}
-            self.log_dict(log_scalars)
+            for k, v in batch["loss_scalars"].items():
+                self.logger.experiment.add_scalar(
+                    f"train/{k}", v, self.global_step)
+
             # figures
             if self.config.TRAINER.ENABLE_PLOTTING:
                 compute_symmetrical_epipolar_errors(
@@ -179,17 +172,10 @@ class PL_EDM(pl.LightningModule):
                 figures = make_matching_figures(
                     batch, self.config, self.config.TRAINER.PLOT_MODE
                 )
-                if self.logger:
-                    for logger in self.loggers:
-                        if 'tensorboard' in logger.__class__.__name__.lower():
-                            for k, v in figures.items():
-                                logger.experiment.add_figure(
-                                    f"train_match/{k}", v, self.global_step
-                                )
-                        elif NEPTUNE_AVAILABLE and 'neptune' in logger.__class__.__name__.lower():
-                            for k, v in figures.items():
-                                # Neptune's `log` method on the experiment object handles matplotlib figures
-                                logger.experiment[f"train_match/{k}"].log(v)
+                for k, v in figures.items():
+                    self.logger.experiment.add_figure(
+                        f"train_match/{k}", v, self.global_step
+                    )
 
         out = {"loss": batch["loss"]}
         self.log("loss", batch["loss"], prog_bar=True, rank_zero_only=True)
@@ -315,14 +301,12 @@ class PL_EDM(pl.LightningModule):
                     self.logger.experiment.add_scalar(
                         f"val_{valset_idx}/avg_{k}", mean_v, global_step=cur_epoch
                     )
-                log_metrics_dict = {}
+
                 # Log all computed metrics
                 for k, v in val_metrics_4tb.items():
-                    log_metrics_dict[f"metrics_{valset_idx}/{k}"] = v
                     self.logger.experiment.add_scalar(
                         f"metrics_{valset_idx}/{k}", v, global_step=cur_epoch
                     )
-                self.log_dict(log_metrics_dict, sync_dist=True)
 
                 # Log figures
                 for k, v_list in figures.items():

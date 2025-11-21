@@ -19,4 +19,3 @@ pillow==9.5.0
 lightning==2.0.0
 poselib
 pyvips
-neptune-client>=0.16.0,<0.17.0
