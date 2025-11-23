@@ -462,7 +462,7 @@ class MultiSceneDataModule(pl.LightningDataModule):
         )
         if not isinstance(self.val_dataset, abc.Sequence):
             return DataLoader(
-                self.val_dataset, shuffle=False, **self.val_loader_params
+                self.val_dataset, **self.val_loader_params
             )
         else:
             dataloaders = []
@@ -478,7 +478,7 @@ class MultiSceneDataModule(pl.LightningDataModule):
         logger.info(
             f"[rank:{self.rank}/{self.world_size}]: Test Sampler and DataLoader re-init."
         )
-        return DataLoader(self.test_dataset, shuffle=False, **self.test_loader_params)
+        return DataLoader(self.test_dataset, **self.test_loader_params)
 
 
 def _build_dataset(dataset: Dataset, *args, **kwargs):
