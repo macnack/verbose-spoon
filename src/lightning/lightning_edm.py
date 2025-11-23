@@ -347,7 +347,7 @@ class PL_EDM(pl.LightningModule):
         if primary_metric_values:
             mean_primary_metric = np.mean(primary_metric_values)
             metric_tensor = torch.tensor(mean_primary_metric)
-                metric_tensor = metric_tensor.to(self.device)
+            metric_tensor = metric_tensor.to(self.device)
 
             self.log(
                 primary_metric_name,
