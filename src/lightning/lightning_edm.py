@@ -196,7 +196,6 @@ class PL_EDM(pl.LightningModule):
             print("Loss is NaN or Inf, skipping backpropagation step.")
             return None
         self.log("loss", batch["loss"], prog_bar=True, rank_zero_only=True)
-
         # avoid significant memory growth
         # self.train_step_outputs.append(out)
         return out
@@ -342,12 +341,14 @@ class PL_EDM(pl.LightningModule):
 
         # --- Log the primary metric for ModelCheckpoint on all ranks ---
         if primary_metric_values:
-            # Average the primary metric across all validation sets if there are multiple
             mean_primary_metric = np.mean(primary_metric_values)
+            metric_tensor = torch.tensor(mean_primary_metric)
+            metric_tensor = metric_tensor.to(self.device)
+
             self.log(
-                primary_metric_name,          # e.g., 'MCE' or 'auc@10'
-                torch.tensor(mean_primary_metric),
-                sync_dist=True,               # Ensure all GPUs have the same value
+                primary_metric_name,
+                metric_tensor, # Pass the GPU tensor
+                sync_dist=True,
             )
         
         # Clear the outputs list for the next validation epoch
