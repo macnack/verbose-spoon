@@ -398,21 +398,49 @@ def aggregate_metrics(metrics, epi_err_thr=5e-4, config=None):
     # --- Homography Metrics ---
     if 'corner_error' in metrics:
         try:
-            corner_errors_flat = _flatten_if_needed(metrics.get("corner_error", []))
+            raw_corner = metrics.get("corner_error", [])
 
-            if len(corner_errors_flat) > 0:
-                corner_errors = np.array(corner_errors_flat)[unq_ids]
-                finite_errors = corner_errors[np.isfinite(corner_errors)]
-                
-                if len(finite_errors) > 0:
-                    pixel_thresholds = [1, 3, 5, 10]
-                    h_aucs = error_auc(finite_errors, pixel_thresholds)
-                    aggregated_metrics.update({f'h_{k}': v for k, v in h_aucs.items()})
-                    aggregated_metrics['MCE'] = np.mean(finite_errors)
+            # Recursively flatten & cast to float
+            flat_corner = []
+
+            def _collect_floats(x):
+                if isinstance(x, (list, tuple, np.ndarray)):
+                    for xx in x:
+                        _collect_floats(xx)
                 else:
-                    aggregated_metrics['MCE'] = float('inf')
-        except (ValueError, IndexError) as e:
+                    try:
+                        flat_corner.append(float(x))
+                    except Exception:
+                        # If something really weird sneaks in, just skip it
+                        pass
+
+            _collect_floats(raw_corner)
+
+            if len(flat_corner) > 0:
+                # Guard in case identifiers length != flat_corner length
+                valid_unq_ids = [i for i in unq_ids if i < len(flat_corner)]
+                if not valid_unq_ids:
+                    logger.warning("No valid indices for corner_error; skipping homography metrics.")
+                else:
+                    corner_errors = np.asarray(flat_corner, dtype=float)[valid_unq_ids]
+
+                    finite_mask = np.isfinite(corner_errors)
+                    finite_errors = corner_errors[finite_mask]
+
+                    if len(finite_errors) > 0:
+                        pixel_thresholds = [1, 3, 5, 10]
+                        h_aucs = error_auc(finite_errors, pixel_thresholds)
+                        # Prefix keys for homography AUCs
+                        aggregated_metrics.update({f"h_{k}": v for k, v in h_aucs.items()})
+                        aggregated_metrics['MCE'] = float(np.mean(finite_errors))
+                    else:
+                        aggregated_metrics['MCE'] = float('inf')
+            else:
+                aggregated_metrics['MCE'] = float('inf')
+
+        except Exception as e:
             logger.warning(f"Could not compute homography metrics due to inconsistent data: {e}")
+            aggregated_metrics['MCE'] = float('inf')
 
     # --- Epipolar Error ---
     if 'epi_errs' in metrics:
