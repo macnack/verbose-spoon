@@ -324,9 +324,11 @@ def error_auc(errors, thresholds):
     recall = list(np.linspace(0, 1, len(errors)))
 
     aucs = []
-    thresholds = [5, 10, 20]
     for thr in thresholds:
         last_index = np.searchsorted(errors, thr)
+        if last_index == 0:
+            aucs.append(0.0)
+            continue
         y = recall[:last_index] + [recall[last_index - 1]]
         x = errors[:last_index] + [thr]
         aucs.append(np.trapz(y, x) / thr)
@@ -400,27 +402,31 @@ def aggregate_metrics(metrics, epi_err_thr=5e-4, config=None):
         try:
             raw_corner = metrics.get("corner_error", [])
 
-            # Recursively flatten & cast to float
+            # Recursively flatten & cast everything to float
             flat_corner = []
 
-            def _collect_floats(x):
-                if isinstance(x, (list, tuple, np.ndarray)):
+            def _collect_corner(x):
+                if isinstance(x, (list, tuple)):
                     for xx in x:
-                        _collect_floats(xx)
+                        _collect_corner(xx)
+                elif isinstance(x, np.ndarray):
+                    for xx in x.reshape(-1):
+                        _collect_corner(xx)
                 else:
                     try:
                         flat_corner.append(float(x))
                     except Exception:
-                        # If something really weird sneaks in, just skip it
+                        # skip completely non-numeric junk
                         pass
 
-            _collect_floats(raw_corner)
+            _collect_corner(raw_corner)
 
             if len(flat_corner) > 0:
-                # Guard in case identifiers length != flat_corner length
+                # make sure we don't index out of bounds
                 valid_unq_ids = [i for i in unq_ids if i < len(flat_corner)]
                 if not valid_unq_ids:
                     logger.warning("No valid indices for corner_error; skipping homography metrics.")
+                    aggregated_metrics['MCE'] = float('inf')
                 else:
                     corner_errors = np.asarray(flat_corner, dtype=float)[valid_unq_ids]
 
@@ -430,7 +436,7 @@ def aggregate_metrics(metrics, epi_err_thr=5e-4, config=None):
                     if len(finite_errors) > 0:
                         pixel_thresholds = [1, 3, 5, 10]
                         h_aucs = error_auc(finite_errors, pixel_thresholds)
-                        # Prefix keys for homography AUCs
+                        # prefix keys so they don't collide with pose AUCs
                         aggregated_metrics.update({f"h_{k}": v for k, v in h_aucs.items()})
                         aggregated_metrics['MCE'] = float(np.mean(finite_errors))
                     else:
@@ -441,6 +447,7 @@ def aggregate_metrics(metrics, epi_err_thr=5e-4, config=None):
         except Exception as e:
             logger.warning(f"Could not compute homography metrics due to inconsistent data: {e}")
             aggregated_metrics['MCE'] = float('inf')
+
 
     # --- Epipolar Error ---
     if 'epi_errs' in metrics:
@@ -458,11 +465,35 @@ def aggregate_metrics(metrics, epi_err_thr=5e-4, config=None):
     # --- General Metrics ---
     if 'num_matches' in metrics:
         try:
-            num_matches_flat = _flatten_if_needed(metrics.get("num_matches", []))
-            if len(num_matches_flat) > 0:
-                u_num_matches = np.array(num_matches_flat)[unq_ids]
-                aggregated_metrics['avg_matches'] = u_num_matches.mean()
-        except (ValueError, IndexError) as e:
+            raw_nm = metrics.get("num_matches", [])
+
+            flat_nm = []
+
+            def _collect_nm(x):
+                if isinstance(x, (list, tuple)):
+                    for xx in x:
+                        _collect_nm(xx)
+                elif isinstance(x, np.ndarray):
+                    for xx in x.reshape(-1):
+                        _collect_nm(xx)
+                else:
+                    try:
+                        flat_nm.append(int(x))
+                    except Exception:
+                        # if it's something weird (e.g. string that can't be int), skip it
+                        pass
+
+            _collect_nm(raw_nm)
+
+            if len(flat_nm) > 0:
+                valid_unq_ids = [i for i in unq_ids if i < len(flat_nm)]
+                if not valid_unq_ids:
+                    logger.warning("No valid indices for num_matches; skipping avg_matches.")
+                else:
+                    u_num_matches = np.asarray(flat_nm, dtype=float)[valid_unq_ids]
+                    aggregated_metrics['avg_matches'] = float(u_num_matches.mean())
+        except Exception as e:
             logger.warning(f"Could not compute avg_matches metric due to inconsistent data: {e}")
+
 
     return aggregated_metrics
