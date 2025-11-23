@@ -353,9 +353,9 @@ def aggregate_metrics(metrics, epi_err_thr=5e-4, config=None):
     This function is now flexible and handles both pose and homography metrics.
     """
     # filter duplicates
-    unq_ids = OrderedDict((iden, id)
-                          for id, iden in enumerate(metrics["identifiers"]))
-    unq_ids = list(unq_ids.values())
+    identifiers_str = [str(iden) for iden in metrics["identifiers"]]
+    unq_ids_dict = OrderedDict((iden_str, id_val) for id_val, iden_str in enumerate(identifiers_str))
+    unq_ids = list(unq_ids_dict.values())
     logger.info(f"Aggregating metrics over {len(unq_ids)} unique items...")
 
     # Create a dictionary to hold all aggregated results
