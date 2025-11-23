@@ -217,19 +217,19 @@ class PL_EDM(pl.LightningModule):
         # self.train_step_outputs.clear()
 
     def validation_step(self, batch, batch_idx):
-        if self.trainer.global_rank != 0:
-            return
         self._trainval_inference(batch)
 
         ret_dict, _ = self._compute_metrics(batch)
 
-        val_plot_interval = max(
-            self.trainer.num_val_batches[0] // self.n_vals_plot, 1)
         figures = {self.config.TRAINER.PLOT_MODE: []}
-        if batch_idx % val_plot_interval == 0:
-            figures = make_matching_figures(
-                batch, self.config, mode=self.config.TRAINER.PLOT_MODE
+        if self.trainer.global_rank == 0:
+            val_plot_interval = max(
+                self.trainer.num_val_batches[0] // self.n_vals_plot, 1
             )
+            if batch_idx % val_plot_interval == 0:
+                figures = make_matching_figures(
+                    batch, self.config, mode=self.config.TRAINER.PLOT_MODE
+                )
 
         out = {
             **ret_dict,
@@ -240,39 +240,23 @@ class PL_EDM(pl.LightningModule):
         return out
 
     def on_validation_epoch_end(self):
-        if self.trainer.global_rank != 0:
-            return
         outputs = self.validation_step_outputs
-        
-        # Guard against empty outputs (e.g., if validation is skipped)
+
+        # Guard against empty outputs (e.g. if validation is skipped)
         if not outputs:
             return
 
         # Handle multiple validation sets (dataloaders)
         multi_outputs = [outputs] if not isinstance(outputs[0], list) else outputs
-        
-        # This will hold the value of the primary metric from each validation set
-        # for checkpointing purposes.
+
         primary_metric_values = []
 
-        # Determine the primary metric to monitor based on the dataset type.
-        # We check the first output of the first validation set to determine this.
         first_output = multi_outputs[0][0]
-        # A simple heuristic: check if 'H_errs' (or your corner_error key) exists.
         is_homography_eval = 'H_errs' in first_output['metrics'] or 'corner_error' in first_output['metrics']
-
-        if is_homography_eval:
-            # For homography, we'll monitor Mean Corner Error (MCE), where lower is better.
-            primary_metric_name = 'MCE'
-        else:
-            # For pose datasets, we monitor the standard pose AUC@10, where higher is better.
-            primary_metric_name = 'auc@10'
+        primary_metric_name = 'MCE' if is_homography_eval else 'auc@10'
 
         for valset_idx, outputs_per_set in enumerate(multi_outputs):
-            # since pl performs sanity_check at the very begining of the training
             cur_epoch = self.trainer.current_epoch
-            # if self.trainer.is_sanity_check:
-            #     cur_epoch = -1
 
             # 1. Gather loss scalars from all GPUs
             _loss_scalars = [o["loss_scalars"] for o in outputs_per_set]
@@ -283,26 +267,21 @@ class PL_EDM(pl.LightningModule):
 
             # 2. Gather and aggregate all metrics from all GPUs
             _metrics = [o["metrics"] for o in outputs_per_set]
-            # Create a full list of all keys from all dictionaries
             all_keys = set(k for d in _metrics for k in d.keys())
             metrics = {
                 k: flattenList(all_gather(flattenList([_me.get(k, []) for _me in _metrics])))
                 for k in all_keys
             }
 
-            # `aggregate_metrics` will now calculate all relevant metrics (pose AUC, H AUC, MCE, etc.)
-            # and return them in a single dictionary.
             val_metrics_4tb = aggregate_metrics(
                 metrics, self.config.TRAINER.EPI_ERR_THR, config=self.config
             )
 
-            # --- Store the value of the primary metric for this validation set ---
             if primary_metric_name in val_metrics_4tb:
                 primary_metric_values.append(val_metrics_4tb[primary_metric_name])
 
-            # 3. Gather figures for visualization (only on rank 0)
+            # 3. Gather figures (only rank 0 really uses them)
             _figures = [o["figures"] for o in outputs_per_set]
-            # Ensure figures dict is not empty before processing
             if _figures and _figures[0]:
                 figure_keys = _figures[0].keys()
                 figures = {
@@ -312,8 +291,7 @@ class PL_EDM(pl.LightningModule):
             else:
                 figures = {}
 
-
-            # --- Logging to TensorBoard (only on rank 0) ---
+            # --- Logging only on rank 0 ---
             if self.trainer.global_rank == 0:
                 # Log average loss scalars
                 for k, v in loss_scalars.items():
@@ -321,14 +299,16 @@ class PL_EDM(pl.LightningModule):
                     self.logger.experiment.add_scalar(
                         f"val_{valset_idx}/avg_{k}", mean_v, global_step=cur_epoch
                     )
+
                 log_metrics_dict = {}
-                # Log all computed metrics
                 for k, v in val_metrics_4tb.items():
                     log_metrics_dict[f"metrics_{valset_idx}/{k}"] = v
                     self.logger.experiment.add_scalar(
                         f"metrics_{valset_idx}/{k}", v, global_step=cur_epoch
                     )
-                self.log_dict(log_metrics_dict, sync_dist=True)
+
+                # Values are already aggregated, no need for extra dist sync here
+                self.log_dict(log_metrics_dict, sync_dist=False)
 
                 # Log figures
                 for k, v_list in figures.items():
@@ -339,24 +319,21 @@ class PL_EDM(pl.LightningModule):
                             cur_epoch,
                             close=True,
                         )
-            
-            # Close all matplotlib figures to prevent memory leaks
+
             plt.close("all")
 
-        # --- Log the primary metric for ModelCheckpoint on all ranks ---
+        # --- Log the primary metric for checkpointing (must be on all ranks with sync_dist=True) ---
         if primary_metric_values:
             mean_primary_metric = np.mean(primary_metric_values)
-            metric_tensor = torch.tensor(mean_primary_metric)
-            metric_tensor = metric_tensor.to(self.device)
-
+            metric_tensor = torch.tensor(mean_primary_metric, device=self.device)
             self.log(
                 primary_metric_name,
-                metric_tensor, # Pass the GPU tensor
+                metric_tensor,
                 sync_dist=True,
             )
-        
-        # Clear the outputs list for the next validation epoch
+
         self.validation_step_outputs.clear()
+
 
     def test_step(self, batch, batch_idx):
         if self.config.EDM.HALF:

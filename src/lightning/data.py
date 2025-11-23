@@ -460,8 +460,6 @@ class MultiSceneDataModule(pl.LightningDataModule):
         logger.info(
             f"[rank:{self.rank}/{self.world_size}]: Val Sampler and DataLoader re-init."
         )
-        if self.rank != 0:
-            return []
         if not isinstance(self.val_dataset, abc.Sequence):
             return DataLoader(
                 self.val_dataset, **self.val_loader_params
