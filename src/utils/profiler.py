@@ -32,8 +32,13 @@ def build_profiler(name):
         return InferenceProfiler()
     elif name == "pytorch":
         from lightning.pytorch.profilers import PyTorchProfiler
+        from torch.profiler import ProfilerActivity
 
-        return PyTorchProfiler(use_cuda=True, profile_memory=True, row_limit=100)
+        return PyTorchProfiler(
+            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            profile_memory=True,
+            row_limit=100,
+        )
     elif name is None:
         return PassThroughProfiler()
     else:
