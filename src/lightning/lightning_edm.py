@@ -217,6 +217,8 @@ class PL_EDM(pl.LightningModule):
         # self.train_step_outputs.clear()
 
     def validation_step(self, batch, batch_idx):
+        if self.trainer.global_rank != 0:
+            return
         self._trainval_inference(batch)
 
         ret_dict, _ = self._compute_metrics(batch)
@@ -238,6 +240,8 @@ class PL_EDM(pl.LightningModule):
         return out
 
     def on_validation_epoch_end(self):
+        if self.trainer.global_rank != 0:
+            return
         outputs = self.validation_step_outputs
         
         # Guard against empty outputs (e.g., if validation is skipped)
@@ -343,7 +347,7 @@ class PL_EDM(pl.LightningModule):
         if primary_metric_values:
             mean_primary_metric = np.mean(primary_metric_values)
             metric_tensor = torch.tensor(mean_primary_metric)
-            metric_tensor = metric_tensor.to(self.device)
+                metric_tensor = metric_tensor.to(self.device)
 
             self.log(
                 primary_metric_name,
