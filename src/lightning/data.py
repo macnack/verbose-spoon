@@ -51,8 +51,6 @@ class MultiSceneDataModule(pl.LightningDataModule):
         self.train_intrinsic_path = config.DATASET.TRAIN_INTRINSIC_PATH
         self.train_num_samples = config.DATASET.TRAIN_NUM_SAMPLES  # (optional)
         self.reproducible_training = config.DATASET.SYNTHETIC_HOMOGRAPHY_REPRODUCIBLE_TRAINING
-        if self.train_num_samples is None:
-            self.train_num_samples = 10
         self.val_data_root = config.DATASET.VAL_DATA_ROOT
         self.val_pose_root = config.DATASET.VAL_POSE_ROOT  # (optional)
         self.val_npz_root = config.DATASET.VAL_NPZ_ROOT
@@ -302,7 +300,7 @@ class MultiSceneDataModule(pl.LightningDataModule):
             )
         if str(data_source).lower() == "synthetichomographypregen":
             return PreGeneratedDataset(
-                root_dir=data_root,
+                root_dir=data_root, num_samples=self.train_num_samples,
             )
 
         if str(data_source).lower() == "megadepth":
@@ -463,9 +461,8 @@ class MultiSceneDataModule(pl.LightningDataModule):
             f"[rank:{self.rank}/{self.world_size}]: Val Sampler and DataLoader re-init."
         )
         if not isinstance(self.val_dataset, abc.Sequence):
-            # sampler = DistributedSampler(self.val_dataset, shuffle=False)
             return DataLoader(
-                self.val_dataset, sampler=None, **self.val_loader_params
+                self.val_dataset, shuffle=False, **self.val_loader_params
             )
         else:
             dataloaders = []
@@ -481,8 +478,7 @@ class MultiSceneDataModule(pl.LightningDataModule):
         logger.info(
             f"[rank:{self.rank}/{self.world_size}]: Test Sampler and DataLoader re-init."
         )
-        sampler = DistributedSampler(self.test_dataset, shuffle=False)
-        return DataLoader(self.test_dataset, sampler=sampler, **self.test_loader_params)
+        return DataLoader(self.test_dataset, shuffle=False, **self.test_loader_params)
 
 
 def _build_dataset(dataset: Dataset, *args, **kwargs):

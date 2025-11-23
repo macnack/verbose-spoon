@@ -157,7 +157,7 @@ def main():
     callbacks = [lr_monitor]
     if not args.disable_ckpt:
         callbacks.append(ckpt_callback)
-
+    use_distributed_sampler = args.gpus > 1 or args.num_nodes > 1
     # Lightning Trainer
     trainer = pl.Trainer(
         accelerator=args.accelerator,
@@ -173,7 +173,7 @@ def main():
         callbacks=callbacks,
         logger=[logger, neptune_logger],
         sync_batchnorm=config.TRAINER.WORLD_SIZE > 0,
-        use_distributed_sampler=False,
+        use_distributed_sampler=use_distributed_sampler,
         profiler=profiler,
     )
     loguru_logger.info(f"Trainer initialized!")
