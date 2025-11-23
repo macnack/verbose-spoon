@@ -348,61 +348,93 @@ def epidist_prec(errors, thresholds, ret_dict=False):
         return precs
 
 
+def _flatten_if_needed(data):
+    """Flattens a list of lists into a single list."""
+    if not data or not isinstance(data[0], list):
+        return data # Already flat or empty
+    return [item for sublist in data for item in sublist]
+
+
 def aggregate_metrics(metrics, epi_err_thr=5e-4, config=None):
-    """Aggregate metrics for the whole dataset.
-    This function is now flexible and handles both pose and homography metrics.
     """
-    # filter duplicates
-    identifiers_str = [str(iden) for iden in metrics["identifiers"]]
+    Aggregate metrics from DDP. This version is robust against jagged lists
+    and inconsistent data types.
+    """
+    # 1. --- Handle Identifiers and Unique IDs ---
+    # Ensure identifiers are a flat list of strings.
+    identifiers_flat = _flatten_if_needed(metrics.get("identifiers", []))
+    identifiers_str = [str(iden) for iden in identifiers_flat]
+    
+    if not identifiers_str:
+        logger.warning("No identifiers found in metrics, returning empty dict.")
+        return {}
+
     unq_ids_dict = OrderedDict((iden_str, id_val) for id_val, iden_str in enumerate(identifiers_str))
     unq_ids = list(unq_ids_dict.values())
     logger.info(f"Aggregating metrics over {len(unq_ids)} unique items...")
 
-    # Create a dictionary to hold all aggregated results
     aggregated_metrics = {}
 
-    # --- Pose Metrics (if available) ---
-    if 'R_errs' in metrics and 't_errs' in metrics:
-        pose_errors = np.max(np.stack([
-            np.array(metrics["R_errs"], dtype=object)[unq_ids], 
-            np.array(metrics["t_errs"], dtype=object)[unq_ids]
-        ]), axis=0)
-        
-        if config and hasattr(config.EDM, 'EVAL_TIMES') and config.EDM.EVAL_TIMES > 1:
-             pose_errors = pose_errors.reshape(-1, config.EDM.EVAL_TIMES).reshape(-1)
-
-        angular_thresholds = [5, 10, 20]
-        pose_aucs = error_auc(pose_errors, angular_thresholds)
-        aggregated_metrics.update({f'pose_{k}': v for k, v in pose_aucs.items()})
-
-    # --- Epipolar Error Metrics (if available) ---
-    if 'epi_errs' in metrics:
-        # CORRECTED LINE: Use the function argument epi_err_thr
-        dist_thresholds = [epi_err_thr]
-        precs = epidist_prec(
-            np.array(metrics["epi_errs"], dtype=object)[unq_ids], 
-            dist_thresholds, True
-        )
-        aggregated_metrics.update(precs)
+    # 2. --- Aggregate Metrics, one by one, with safety checks ---
     
-    # --- Homography Metrics (if corner error data is present) ---
-    # `corner_error` is the key we created in `compute_homography_errors`.
+    # --- Pose Metrics ---
+    if 'R_errs' in metrics and 't_errs' in metrics:
+        try:
+            r_errs_flat = _flatten_if_needed(metrics.get("R_errs", []))
+            t_errs_flat = _flatten_if_needed(metrics.get("t_errs", []))
+            
+            if len(r_errs_flat) > 0 and len(t_errs_flat) > 0:
+                r_errs_unq = np.array(r_errs_flat)[unq_ids]
+                t_errs_unq = np.array(t_errs_flat)[unq_ids]
+                
+                pose_errors = np.max(np.stack([r_errs_unq, t_errs_unq]), axis=0)
+                
+                angular_thresholds = [5, 10, 20]
+                pose_aucs = error_auc(pose_errors, angular_thresholds)
+                aggregated_metrics.update(pose_aucs)
+        except (ValueError, IndexError) as e:
+            logger.warning(f"Could not compute pose metrics due to inconsistent data: {e}")
+
+    # --- Homography Metrics ---
     if 'corner_error' in metrics:
-        corner_errors = np.array(metrics["corner_error"])[unq_ids]
-        # Filter out any 'inf' values that result from RANSAC failures
-        corner_errors = corner_errors[np.isfinite(corner_errors)]
-        
-        # Use pixel-based thresholds for corner error AUC
-        pixel_thresholds = [1, 3, 5, 10]
-        h_aucs = error_auc(corner_errors, pixel_thresholds)
-        # Store with a distinct name, e.g., 'h_auc@1' for "homography auc"
-        aggregated_metrics.update({f'h_{k}': v for k, v in h_aucs.items()})
-        
-        # Also, calculate the Mean Corner Error (MCE)
-        aggregated_metrics['MCE'] = np.mean(corner_errors)
+        try:
+            corner_errors_flat = _flatten_if_needed(metrics.get("corner_error", []))
+
+            if len(corner_errors_flat) > 0:
+                corner_errors = np.array(corner_errors_flat)[unq_ids]
+                finite_errors = corner_errors[np.isfinite(corner_errors)]
+                
+                if len(finite_errors) > 0:
+                    pixel_thresholds = [1, 3, 5, 10]
+                    h_aucs = error_auc(finite_errors, pixel_thresholds)
+                    aggregated_metrics.update({f'h_{k}': v for k, v in h_aucs.items()})
+                    aggregated_metrics['MCE'] = np.mean(finite_errors)
+                else:
+                    aggregated_metrics['MCE'] = float('inf')
+        except (ValueError, IndexError) as e:
+            logger.warning(f"Could not compute homography metrics due to inconsistent data: {e}")
+
+    # --- Epipolar Error ---
+    if 'epi_errs' in metrics:
+        try:
+            epi_errs_list = metrics.get("epi_errs", [])
+            if len(epi_errs_list) > 0:
+                # This metric expects a list of arrays, so we don't flatten the inner arrays
+                epi_errs_unq = np.array(epi_errs_list, dtype=object)[unq_ids]
+                dist_thresholds = [epi_err_thr]
+                precs = epidist_prec(epi_errs_unq, dist_thresholds, True)
+                aggregated_metrics.update(precs)
+        except (ValueError, IndexError) as e:
+            logger.warning(f"Could not compute epipolar error metrics due to inconsistent data: {e}")
 
     # --- General Metrics ---
-    u_num_matches = np.array(metrics["num_matches"], dtype=object)[unq_ids]
-    aggregated_metrics['num_matches'] = u_num_matches.mean()
-    
+    if 'num_matches' in metrics:
+        try:
+            num_matches_flat = _flatten_if_needed(metrics.get("num_matches", []))
+            if len(num_matches_flat) > 0:
+                u_num_matches = np.array(num_matches_flat)[unq_ids]
+                aggregated_metrics['avg_matches'] = u_num_matches.mean()
+        except (ValueError, IndexError) as e:
+            logger.warning(f"Could not compute avg_matches metric due to inconsistent data: {e}")
+
     return aggregated_metrics
