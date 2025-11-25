@@ -51,4 +51,5 @@ class PreGeneratedDataset(Dataset):
         data['dataset_name'] = 'SyntheticHomography'
         data.pop('semantic0', None)
         data.pop('semantic1', None)
+        data['filename'] = self.files[idx]
         return data
