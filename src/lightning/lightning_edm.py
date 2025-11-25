@@ -25,6 +25,7 @@ from src.utils.plotting import make_matching_figures
 from src.utils.comm import gather, all_gather
 from src.utils.misc import lower_config, flattenList
 from src.utils.profiler import PassThroughProfiler
+from datetime import datetime
 try:
     # Neptune is an optional dependency for logging figures.
     from neptune.types import File
@@ -43,7 +44,8 @@ class PL_EDM(pl.LightningModule):
         self.config = config  # full config
         _config = lower_config(self.config)
         self.save_hyperparameters(_config)
-        
+        now = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.ignore_files = "ignore_files_" + now + ".csv"
         self.profiler = profiler or PassThroughProfiler()
         self.n_vals_plot = max(
             config.TRAINER.N_VAL_PAIRS_TO_PLOT // config.TRAINER.WORLD_SIZE, 1
@@ -192,9 +194,11 @@ class PL_EDM(pl.LightningModule):
                                 logger.experiment[f"train_match/{k}"].log(v)
 
         out = {"loss": batch["loss"]}
-        if batch["loss"] > 400:
+        if batch["loss"] > 100:
             print("Loss is NaN or Inf, skipping backpropagation step.")
-            return None
+            with open(self.ignore_files, 'a') as f:
+                for path in batch.get('filename', []):
+                    f.write(f"{path}\n")
         self.log("loss", batch["loss"], prog_bar=True, rank_zero_only=True)
         # avoid significant memory growth
         # self.train_step_outputs.append(out)
