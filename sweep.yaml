@@ -1,0 +1,53 @@
+# sweep.yaml (Corrected Version)
+
+program: train.py
+method: bayes
+metric:
+  name: MCE
+  goal: minimize
+
+parameters:
+  # ... (your parameters section remains unchanged) ...
+  trainer.canonical_lr:
+    distribution: log_uniform_values
+    min: 1e-4
+    max: 5e-3
+  edm.loss.focal_gamma:
+    distribution: uniform
+    min: 1.5
+    max: 3.0
+  edm.coarse.dsmax_temperature:
+    distribution: uniform
+    min: 0.07
+    max: 0.3
+  trainer.adamw_decay:
+    distribution: log_uniform_values
+    min: 0.01
+    max: 0.2
+  edm.coarse.topk:
+    distribution: q_uniform
+    q: 128
+    min: 1024
+    max: 4096
+command:
+  - ${env}
+  - python
+  - ${program}
+  # --- Your fixed arguments from vpn.sh (WITHOUT quotes) ---
+  - configs/data/synthetic_homography_pregen.py
+  - configs/edm/outdoor/edm_base.py
+  - --exp_name=edm_sweep  # No quotes
+  - --gpus=1
+  - --num_nodes=1
+  - --accelerator=auto    # No quotes
+  - --batch_size=1
+  - --num_workers=4
+  - --pin_memory=true
+  - --ckpt_path=/home/mackop/workspace/weights/edm_outdoor.ckpt # No quotes
+  - --log_every_n_steps=1
+  - --num_sanity_val_steps=0
+  - --benchmark=true
+  - --split_data_idx=1
+  # --- Sweep-specific arguments ---
+  - --max_epochs=5
+  - --check_val_every_n_epoch=1

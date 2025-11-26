@@ -16,6 +16,8 @@ from src.utils.profiler import build_profiler
 from src.lightning.data import MultiSceneDataModule
 from src.lightning.lightning_edm import PL_EDM
 import torch
+import os
+import wandb
 loguru_logger = get_rank_zero_only_logger(loguru_logger)
 
 
@@ -99,6 +101,22 @@ def main():
     config.TRAINER.WARMUP_STEP = math.floor(
         config.TRAINER.WARMUP_STEP / _scaling)
 
+    wandb.init()
+    sweep_config = wandb.config
+    for key, value in sweep_config.items():
+        if '.' in key:
+            # Handle nested keys like "trainer.canonical_lr"
+            keys = key.split('.')
+            cfg_level = config
+            for k in keys[:-1]:
+                cfg_level = cfg_level[k.upper()]
+            cfg_level[keys[-1].upper()] = value
+        else:
+            # Handle top-level keys if you have any
+            config[key.upper()] = value
+    args.exp_name = f"{args.exp_name}-{wandb.run.name}"
+    from lightning.pytorch.loggers import WandbLogger
+    wandb_logger = WandbLogger(project="krupka-maciej-put-poznan-pl/edm", name=wandb.run.name)
     # lightning module
     profiler = build_profiler(args.profiler_name)
     model = PL_EDM(config, pretrained_ckpt=args.ckpt_path, profiler=profiler)
@@ -171,7 +189,7 @@ def main():
         benchmark=True,
         gradient_clip_val=config.TRAINER.GRADIENT_CLIPPING,
         callbacks=callbacks,
-        logger=[logger, neptune_logger],
+        logger=[logger, neptune_logger, wandb_logger],
         sync_batchnorm=config.TRAINER.WORLD_SIZE > 0,
         use_distributed_sampler=use_distributed_sampler,
         profiler=profiler,
