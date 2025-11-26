@@ -50,6 +50,8 @@ class MultiSceneDataModule(pl.LightningDataModule):
         self.train_list_path = config.DATASET.TRAIN_LIST_PATH
         self.train_intrinsic_path = config.DATASET.TRAIN_INTRINSIC_PATH
         self.train_num_samples = config.DATASET.TRAIN_NUM_SAMPLES  # (optional)
+        self.val_num_samples = config.DATASET.VAL_NUM_SAMPLES  # (optional)
+        self.ignore_list = config.DATASET.IGNORE_LIST
         self.reproducible_training = config.DATASET.SYNTHETIC_HOMOGRAPHY_REPRODUCIBLE_TRAINING
         self.val_data_root = config.DATASET.VAL_DATA_ROOT
         self.val_pose_root = config.DATASET.VAL_POSE_ROOT  # (optional)
@@ -300,7 +302,7 @@ class MultiSceneDataModule(pl.LightningDataModule):
             )
         if str(data_source).lower() == "synthetichomographypregen":
             return PreGeneratedDataset(
-                root_dir=data_root, num_samples=self.train_num_samples,
+                root_dir=data_root, num_samples=self.train_num_samples if mode =='train' else self.val_num_samples, ignore_csv=self.ignore_list
             )
 
         if str(data_source).lower() == "megadepth":

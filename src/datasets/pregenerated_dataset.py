@@ -20,11 +20,10 @@ class PreGeneratedDataset(Dataset):
         self.root_path = Path(root_dir)
         self.sample_dir = os.path.join(root_dir, "samples")
         self.load_metadata = load_metadata
-        ignore_path = Path(ignore_csv)
-        if ignore_path.exists():
+        ignore_path = Path(ignore_csv) if ignore_csv else None
+        if ignore_path and ignore_path.exists():
             df = pd.read_csv(ignore_path)
-            # CSV expected to contain: filename
-            self.ignore_files = set(df["filename"].astype(str).tolist())
+            self.ignore_files = set(df["filename"].astype(str))
         else:
             self.ignore_files = set()
         all_files = [
